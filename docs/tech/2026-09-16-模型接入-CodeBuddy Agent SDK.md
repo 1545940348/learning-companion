@@ -156,8 +156,36 @@ SDK 导出了 `OutputFormat` / `JsonSchemaOutputFormat` 类型，且有 `Options
 - [ ] 把第四章结论同步给 B —— **B4 不能依赖 `structured_output`**
 - [ ] 补测"图片路径下的 JSON 输出是否同样稳定"
 - [ ] 实测"零材料提问能否稳定在 30 秒内返回"（对应说明书 11.1 视频脚本 0:20—0:45）
+- [x] 适配层接入服务端统一模型层（第 4 轮：替换队友的 HTTP 直连，保留其 mock）
+- [ ] **把合并结果同步给队友**：HTTP 适配器已被 SDK 替换、包名统一为 `@lc/*`、密钥位置变更
+- [ ] 与 B 确认 `ModelCaller` 接口扩展（入参已由 `string` 扩为 `string | ModelInputBlock[]`）
+- [ ] 与说明书对齐队友新增的 `POST /api/session`（说明书 5.2 只定义了五个接口）
 
-## 七、真实性声明
+## 八、与服务端骨架的合并（2026-09-16 第 4 轮）
+
+队友先推了完整骨架（`59b3124`，覆盖三人模块），C 的成果随后并入。
+**本层的行为因此有几处变化，记录如下：**
+
+| 项 | 合并前（C 独立） | 合并后 |
+|---|---|---|
+| 包名 | `@calc/contracts` | `@lc/contracts` |
+| 服务端真实适配器 | SDK（`apps/server/src/model/workbuddy.ts`） | 同上，**替换掉队友的 HTTP 直连** |
+| mock 适配器 | 无 | **保留队友的 mock**；`MODEL_PROVIDER` 三档 `auto` / `mock` / `sdk` |
+| 配置变量 | `MODEL_BASE_URL` / `MODEL_NAME` | **已删除**（本接入方式下不存在） |
+| 工具链 | `tsc -b` ＋ `dist` 产物 | 队友方案：`tsx` / `tsup` / `vite`，`Bundler` ＋ `noEmit` |
+| `.env` 位置 | 仓库根 | `apps/server/.env`（队友约定，服务端专属配置就近放置） |
+
+**两层模型接口的分工**（避免混淆）：
+
+- `ModelClient`（`@lc/contracts`）—— **传输层**接口，C 实现，SDK 类型不外泄；
+- `ModelCaller`（`@lc/teaching`）—— **教学模块面向的注入函数**，B 只依赖它；
+- 二者由 `apps/server/src/model/index.ts` 的适配器桥接：`ModelCaller` → `ModelClient`。
+
+**`MODEL_PROVIDER` 的 `sdk` 档位是本次新增**：无密钥时不静默降级。
+原因是 `auto` 档位在无密钥时会降级为 mock，若在演示或截图时不慎，容易把 mock 当成真实能力
+（违反说明书 9.2 的诚实性要求）。
+
+## 九、真实性声明
 
 本记录中的"实测事实"均来自 2026-09-16 的实际执行输出，包括：
 

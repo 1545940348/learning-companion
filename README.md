@@ -59,10 +59,23 @@ npm run dev
 
 ```bash
 cp apps/server/.env.example apps/server/.env
-# 编辑 apps/server/.env：MODEL_PROVIDER / MODEL_API_KEY / MODEL_BASE_URL / MODEL_NAME
+# 编辑 apps/server/.env，填入 CODEBUDDY_API_KEY
 ```
 
 > 密钥只保存在服务端 `apps/server/.env`，已被 `.gitignore` 排除，**不要提交**。
+> ⚠️ **`apps/server/.env.example` 会随仓库提交、评委可见，请勿在其中填入真实密钥。**
+
+模型推理通过 **CodeBuddy Agent SDK**（`@tencent-ai/agent-sdk`）调用：认证由 SDK 读取环境变量完成，
+**没有 base URL，也没有固定模型名** —— 模型由上游动态分配（同日实测出现过多个不同型号），只能从响应回读。
+选型理由、实测事实与已知限制见 `docs/tech/2026-09-16-模型接入-CodeBuddy Agent SDK.md`。
+
+模型适配层的自检与调用验证：
+
+```bash
+npm run smoke:model:selfcheck -w @lc/server                # 仅校验配置，不消耗额度
+npm run smoke:model:text -w @lc/server                     # 纯文字调用
+npm run smoke:model:image -w @lc/server -- <图片路径>       # 含图片调用（PNG/JPEG，≤5MB）
+```
 
 ## 目录结构
 
@@ -103,14 +116,30 @@ docs/
 
 **骨架可运行。** 说明书已定稿至 V1.2；前后端骨架已搭建，`npm run dev` 可一键启动，接口冒烟测试 29 项通过。
 
-业务能力尚未实现：真实图文识别、缺口判定的固定规则、以及大部分前端交互仍为占位。
-当前默认运行在 **mock 适配器**下，未接入真实模型。
+业务能力尚未实现：缺口判定的固定规则、按材料出题，以及大部分前端交互仍为占位。
+
+**模型适配层已完成，并通过真实密钥端到端验收**（文字调用与图片调用均实测通过）。
+适配器由 `MODEL_PROVIDER` 控制，默认 `auto`：配置了密钥走真实模型，未配置则降级为 mock。
+若显式设置 `MODEL_PROVIDER=sdk`，无密钥时不会静默降级 —— 避免演示或截图时误把 mock 当成真实能力。
 
 本仓库中标为"设计"或"后续迭代"的能力，请勿视为已完成功能。
 
 ## 第三方依赖声明
 
-待实现后补充；将按赛事要求注明所使用的开源框架与第三方库。
+按赛事手册 8.2 要求注明所使用的开源框架与第三方库（实际锁定版本见各 workspace 的 `package.json`）。
+
+| 依赖 | 版本 | 用途 | 许可 |
+|---|---|---|---|
+| `@tencent-ai/agent-sdk` | ^0.3.259 | 模型推理调用（CodeBuddy Agent SDK） | MIT |
+| `express` | ^4.21.0 | HTTP 服务（`apps/server`） | MIT |
+| `dotenv` | ^16.4.0 | 服务端环境变量加载 | BSD-2-Clause |
+| `react` / `react-dom` | ^19.0.0 | 前端框架（`apps/web`） | MIT |
+| `vite` | ^6.0.0 | 前端构建与开发服务器 | MIT |
+| `tsx` | ^4.19.0 | 开发期 TypeScript 运行器 | MIT |
+| `tsup` | ^8.3.0 | 服务端构建 | MIT |
+| `typescript` | ^5.7.0 | 构建与类型检查 | Apache-2.0 |
+
+第三方推理接口的使用方式以赛事方最终答复为准（见 `docs/tech` 模型接入记录的待办项）。
 
 ## 开源协议
 
