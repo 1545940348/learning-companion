@@ -6,8 +6,8 @@
  */
 
 import express from 'express';
-import { describeModelAdapter, env } from './env.js';
-import { apiRouter, errorHandler } from './routes.js';
+import { describeModelAdapter, env } from './config/env.js';
+import { apiRouter, errorHandler } from './http/routes.js';
 
 const app = express();
 

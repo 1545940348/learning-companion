@@ -34,8 +34,8 @@ import type {
   TutorResponse,
 } from '@lc/contracts';
 import { MATERIAL_LIMITS, MATERIAL_QUIZ_PER_TOPIC } from '@lc/contracts';
-import { env } from './env.js';
-import { createModelAdapter } from './model/index.js';
+import { env } from '../config/env.js';
+import { createModelAdapter } from '../model/index.js';
 import {
   SessionNotFoundError,
   applyMaterials,
@@ -43,7 +43,7 @@ import {
   checkMaterialQuota,
   createSession,
   requireSession,
-} from './store.js';
+} from '../store/index.js';
 
 const adapter = createModelAdapter();
 const teaching = createTeachingModule(adapter.call);

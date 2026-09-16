@@ -8,7 +8,7 @@
 import type { ModelCaller, ModelCallOptions, ModelInput } from '@lc/teaching';
 import type { ModelContentBlock } from '@lc/contracts';
 import { createWorkbuddyModelClient } from './workbuddy.js';
-import { env } from '../env.js';
+import { env } from '../config/env.js';
 
 /** 取输入中的文本部分。mock 不做图像识别，含图片时只使用其中的文本块。 */
 function toPromptText(input: ModelInput): string {

@@ -16,7 +16,7 @@
 
 import { readFile } from 'node:fs/promises';
 import type { ModelContentBlock, ModelRequest } from '@lc/contracts';
-import { env } from '../env.js';
+import { env } from '../config/env.js';
 import { MAX_IMAGE_BYTES, createWorkbuddyModelClient } from './workbuddy.js';
 import { ModelError, redact } from './errors.js';
 
