@@ -6,8 +6,8 @@
  */
 
 import express from 'express';
-import { env } from './env.js';
-import { apiRouter, errorHandler } from './routes.js';
+import { describeModelAdapter, env } from './config/env.js';
+import { apiRouter, errorHandler } from './http/routes.js';
 
 const app = express();
 
@@ -27,7 +27,7 @@ app.use('/api', apiRouter);
 app.use(errorHandler);
 
 app.listen(env.port, () => {
-  const mockNote = env.useMock ? '（未配置密钥，使用 mock）' : '';
   console.log(`[server] http://localhost:${env.port}`);
-  console.log(`[server] model: ${env.modelProvider}${mockNote}`);
+  // 明确打出本次生效的适配器，避免演示或截图时误把 mock 当成真实能力（说明书 9.2）
+  console.log(`[server] ${describeModelAdapter()}`);
 });

@@ -5,8 +5,20 @@
  * 未配置密钥时自动使用 mock，使 A 能独立开发前端（说明书 8.2）。
  */
 
-import type { ModelCaller, ModelCallOptions } from '@lc/teaching';
-import { env } from '../env.js';
+import type { ModelCaller, ModelCallOptions, ModelInput } from '@lc/teaching';
+import type { ModelContentBlock } from '@lc/contracts';
+import { createWorkbuddyModelClient } from './workbuddy.js';
+import { env } from '../config/env.js';
+
+/** 取输入中的文本部分。mock 不做图像识别，含图片时只使用其中的文本块。 */
+function toPromptText(input: ModelInput): string {
+  if (typeof input === 'string') return input;
+  const parts: string[] = [];
+  for (const block of input) {
+    if (block.type === 'text') parts.push(block.text);
+  }
+  return parts.join('\n\n');
+}
 
 export interface ModelAdapter {
   name: string;
@@ -25,7 +37,7 @@ function createMockAdapter(): ModelAdapter {
   return {
     name: 'mock',
     isMock: true,
-    call: async (prompt, options) => mockRespond(prompt, options),
+    call: async (input, options) => mockRespond(toPromptText(input), options),
   };
 }
 
@@ -159,58 +171,69 @@ function mockTutor(materialIds: string[], zeroMaterial: boolean): string {
   });
 }
 
-/* ==================== OpenAI 兼容适配器 ==================== */
+/* ==================== 真实适配器：CodeBuddy Agent SDK ==================== */
 
-/** 适用于 DeepSeek 等提供 /chat/completions 的接口 */
-function createOpenAiCompatibleAdapter(): ModelAdapter {
+/**
+ * 为什么不用 HTTP 直连
+ *
+ * 本项目的模型接入已确定为 CodeBuddy Agent SDK，认证由 SDK 读取环境变量完成，
+ * **没有 base URL，也没有固定模型名** —— 模型由上游动态分配
+ * （同日实测 hy3 / glm-5.3 / minimax-m3 三个不同结果，只能从响应回读）。
+ * 因此原先 `fetch(\`${MODEL_BASE_URL}/chat/completions\`)` 的写法在本接入方式下无法配置，
+ * 已替换为 SDK 调用。详见 docs/tech/2026-09-16-模型接入-CodeBuddy Agent SDK.md。
+ */
+
+const JSON_INSTRUCTION =
+  '只输出一个 JSON 对象。不要使用 markdown 代码块包裹，不要输出任何解释文字。';
+
+/** 把教学模块的输入统一成 SDK 需要的内容块 */
+function normalizeBlocks(input: ModelInput): ModelContentBlock[] {
+  if (typeof input === 'string') {
+    return [{ type: 'text', text: input }];
+  }
+  return input.map((block): ModelContentBlock =>
+    block.type === 'text'
+      ? { type: 'text', text: block.text }
+      : { type: 'image', mediaType: block.mediaType, dataBase64: block.dataBase64 },
+  );
+}
+
+/**
+ * options.json 只能在提示词层面表达。
+ *
+ * 上游不兑现结构化输出约束（2026-09-16 两次实测），因此这里没有 response_format，
+ * 调用方仍需自行解析 JSON 并校验，失败可重试。
+ */
+function buildSystemPrompt(options: ModelCallOptions): string | undefined {
+  const parts: string[] = [];
+  if (options.system) parts.push(options.system);
+  if (options.json) parts.push(JSON_INSTRUCTION);
+  return parts.length > 0 ? parts.join('\n\n') : undefined;
+}
+
+function createCodebuddySdkAdapter(): ModelAdapter {
+  const client = createWorkbuddyModelClient({
+    apiKey: env.codebuddyApiKey,
+    environment: env.codebuddyEnvironment,
+    timeoutMs: env.modelTimeoutMs,
+    log: (line) => console.log(line),
+  });
+
   return {
-    name: env.modelProvider,
+    name: 'codebuddy-agent-sdk',
     isMock: false,
-    call: async (prompt, options = {}) => {
-      const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(),
-        options.timeoutMs ?? env.modelTimeoutMs,
-      );
-
-      try {
-        const base = env.modelBaseUrl.replace(/\/+$/, '');
-        const response = await fetch(`${base}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${env.modelApiKey}`,
-          },
-          body: JSON.stringify({
-            model: env.modelName,
-            messages: [
-              ...(options.system ? [{ role: 'system', content: options.system }] : []),
-              { role: 'user', content: prompt },
-            ],
-            ...(options.json ? { response_format: { type: 'json_object' } } : {}),
-          }),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`模型接口返回 ${response.status}`);
-        }
-
-        const data = (await response.json()) as {
-          choices?: { message?: { content?: string } }[];
-        };
-        const content = data.choices?.[0]?.message?.content;
-        if (!content) {
-          throw new Error('模型返回内容为空');
-        }
-        return content;
-      } finally {
-        clearTimeout(timer);
-      }
+    call: async (input, options = {}) => {
+      const result = await client.complete({
+        systemPrompt: buildSystemPrompt(options),
+        content: normalizeBlocks(input),
+        timeoutMs: options.timeoutMs,
+        purpose: 'teaching',
+      });
+      return result.text;
     },
   };
 }
 
 export function createModelAdapter(): ModelAdapter {
-  return env.useMock ? createMockAdapter() : createOpenAiCompatibleAdapter();
+  return env.useMock ? createMockAdapter() : createCodebuddySdkAdapter();
 }
