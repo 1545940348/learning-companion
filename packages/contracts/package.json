@@ -1,0 +1,15 @@
+{
+  "name": "@calc/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "微积分学伴共享类型与契约",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}

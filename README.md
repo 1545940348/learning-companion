@@ -48,16 +48,40 @@ apps/server       Node.js + TypeScript    模型适配 / 会话 / 部署
 ## 快速开始
 
 ```bash
-cp .env.example .env    # 填入模型接口配置
+cp .env.example .env    # 填入 CODEBUDDY_API_KEY
 npm install
-npm run dev
+npm run build           # tsc -b，构建 packages/contracts 与 apps/server
 ```
 
-> 密钥只保存在服务端环境变量中，**不要提交 `.env`**。
+模型调用自检（不联网、不消耗额度）：
+
+```bash
+npm run smoke:model:selfcheck
+```
+
+三条真实调用验证命令（会消耗账户额度）：
+
+```bash
+npm run smoke:model:text                  # 纯文字
+npm run smoke:model:structured            # 结构化输出（json_schema）
+npm run smoke:model:image -- <图片路径>    # 含图片，PNG/JPEG，≤5MB
+```
+
+> 密钥只保存在服务端环境变量中，**不要提交 `.env`**，也不要在对话或文档中粘贴密钥原文。
+
+### 模型调用方式
+
+模型推理通过 **CodeBuddy Agent SDK**（`@tencent-ai/agent-sdk`）调用。认证由 SDK 读取环境变量完成，
+**不配置 HTTP 端点，也不固定模型名** —— 模型由上游按输入类型自动选择。
+选型理由、实测事实与已知限制见 `docs/tech/2026-09-16-模型接入-CodeBuddy Agent SDK.md`。
 
 ## 目录结构
 
 ```
+apps/
+  server/          Node.js + TypeScript：模型适配、会话与部署
+packages/
+  contracts/       共享类型与契约
 docs/
   plans/          每轮开发计划
   changelogs/     每轮变更记录
@@ -67,6 +91,8 @@ docs/
   大湾区AI_Coding创新大赛_赛事手册.md
   赛题意图与产品设计分析.md
 ```
+
+> `apps/web`（A）与 `packages/teaching`（B）尚未建立。
 
 ## 开发文档留痕
 
@@ -87,13 +113,29 @@ docs/
 
 ## 当前状态
 
-**设计阶段。** 说明书已定稿至 V1.2，代码尚未开始开发。
+**开发中（第 2 轮）。** 说明书已定稿至 V1.2。
+
+| 模块 | 状态 |
+|---|---|
+| `packages/contracts` | 模型调用接口已冻结；五接口契约待第 3 轮补齐 |
+| `apps/server` 模型适配层 | 已完成，工具链验证通过；**真实模型调用尚未端到端验收** |
+| `apps/server` 五接口与部署 | 未开始 |
+| `apps/web`（A） | 未开始 |
+| `packages/teaching`（B） | 未开始 |
 
 本仓库中标注为"设计"或"后续迭代"的能力尚未实现，请勿视为已完成功能。
 
 ## 第三方依赖声明
 
-待实现后补充；将按赛事要求注明所使用的开源框架与第三方库。
+按赛事手册 8.2 要求注明所使用的开源框架与第三方库。
+
+| 依赖 | 版本 | 用途 | 许可 |
+|---|---|---|---|
+| `@tencent-ai/agent-sdk` | ^0.3.259 | 模型推理调用（CodeBuddy Agent SDK） | MIT |
+| `typescript` | ^5.7.2 | 构建与类型检查 | Apache-2.0 |
+| `@types/node` | ^22.10.2 | Node.js 类型定义 | MIT |
+
+前端与教学模块依赖在对应模块建立后补充。
 
 ## 开源协议
 

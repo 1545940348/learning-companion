@@ -38,6 +38,7 @@ coverage/
 # 编辑器与系统文件
 .vscode/*
 !.vscode/extensions.json
+.vs/
 .idea/
 *.swp
 .DS_Store
