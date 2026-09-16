@@ -1,0 +1,23 @@
+{
+  "name": "learning-companion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "微积分学伴 —— 面向一元函数微分学的多模态教学智能体",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @lc/server",
+    "dev:web": "npm run dev -w @lc/web",
+    "build": "npm run build -w @lc/server && npm run build -w @lc/web",
+    "start": "npm run start -w @lc/server",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}
