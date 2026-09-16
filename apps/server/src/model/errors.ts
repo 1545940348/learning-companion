@@ -1,4 +1,4 @@
-import type { ModelErrorCode, ModelFailure } from '@calc/contracts';
+import type { ModelErrorCode, ModelFailure } from '@lc/contracts';
 
 /**
  * 适配层统一错误。

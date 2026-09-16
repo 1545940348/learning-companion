@@ -3,6 +3,9 @@ node_modules/
 .pnpm-store/
 .yarn/
 
+# npm 本地缓存（沙箱环境下改用项目内缓存，避免写入用户目录）
+.npm-cache/
+
 # 构建产物
 dist/
 build/

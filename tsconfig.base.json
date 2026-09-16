@@ -1,20 +1,25 @@
 {
-  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+
     "strict": true,
-    "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "composite": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "exactOptionalPropertyTypes": false,
+
+    "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "isolatedModules": true
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    "declaration": true,
+    "sourceMap": true,
+    "noEmit": true
   }
 }

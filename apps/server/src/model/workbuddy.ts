@@ -9,7 +9,7 @@
  * 3. 输入沿用两条已验证形态：纯文字用字符串 prompt，含图片用 UserMessage 异步流。
  *    两条路径都已在 2026-09-16 实测通过，故不合并成一条未经实测的路径。
  *
- * 该层对外只暴露 @calc/contracts 的 ModelClient 接口，SDK 类型不外泄。
+ * 该层对外只暴露 @lc/contracts 的 ModelClient 接口，SDK 类型不外泄。
  * 若要更换调用方式（例如换成其他 SDK 或自建服务），只需替换本目录实现。
  */
 
@@ -29,7 +29,7 @@ import type {
   ModelResult,
   ModelSelfCheckResult,
   ModelUsage,
-} from '@calc/contracts';
+} from '@lc/contracts';
 import { ModelError, redact } from './errors.js';
 
 export const PROVIDER_ID = 'codebuddy-agent-sdk';

@@ -39,6 +39,7 @@ apps/server       Node.js + TypeScript    模型适配 / 会话 / 部署
 
 | 接口 | 用途 |
 |---|---|
+| `POST /api/session` | 创建会话，返回初始材料版本 0 |
 | `POST /api/parse` | 文字 / 图片 → 识别文本（可直接使用）、低置信度标记 |
 | `POST /api/knowledge` | 材料与补充块 → 知识点、前置关系与来源 |
 | `POST /api/tutor` | 提问 → 分块回答、来源、下一步（材料版本可为空，表示零材料提问） |
@@ -48,40 +49,29 @@ apps/server       Node.js + TypeScript    模型适配 / 会话 / 部署
 ## 快速开始
 
 ```bash
-cp .env.example .env    # 填入 CODEBUDDY_API_KEY
 npm install
-npm run build           # tsc -b，构建 packages/contracts 与 apps/server
+npm run dev
 ```
 
-模型调用自检（不联网、不消耗额度）：
+默认使用 **mock 适配器**，不配置任何密钥即可跑通完整流程。冒烟测试见 `apps/server/scripts/smoke.mjs`。
+
+接入真实模型时：
 
 ```bash
-npm run smoke:model:selfcheck
+cp apps/server/.env.example apps/server/.env
+# 编辑 apps/server/.env：MODEL_PROVIDER / MODEL_API_KEY / MODEL_BASE_URL / MODEL_NAME
 ```
 
-三条真实调用验证命令（会消耗账户额度）：
-
-```bash
-npm run smoke:model:text                  # 纯文字
-npm run smoke:model:structured            # 结构化输出（json_schema）
-npm run smoke:model:image -- <图片路径>    # 含图片，PNG/JPEG，≤5MB
-```
-
-> 密钥只保存在服务端环境变量中，**不要提交 `.env`**，也不要在对话或文档中粘贴密钥原文。
-
-### 模型调用方式
-
-模型推理通过 **CodeBuddy Agent SDK**（`@tencent-ai/agent-sdk`）调用。认证由 SDK 读取环境变量完成，
-**不配置 HTTP 端点，也不固定模型名** —— 模型由上游按输入类型自动选择。
-选型理由、实测事实与已知限制见 `docs/tech/2026-09-16-模型接入-CodeBuddy Agent SDK.md`。
+> 密钥只保存在服务端 `apps/server/.env`，已被 `.gitignore` 排除，**不要提交**。
 
 ## 目录结构
 
 ```
-apps/
-  server/          Node.js + TypeScript：模型适配、会话与部署
-packages/
-  contracts/       共享类型与契约
+apps/web/           React 前端：交互层（A）
+apps/server/        Node 服务端：模型适配、会话、接口（C）
+packages/contracts  共享契约类型，前后端唯一事实来源
+packages/teaching   教学模块：提示词、依赖判定、缺口补充、校验、题目（B）
+
 docs/
   plans/          每轮开发计划
   changelogs/     每轮变更记录
@@ -91,8 +81,6 @@ docs/
   大湾区AI_Coding创新大赛_赛事手册.md
   赛题意图与产品设计分析.md
 ```
-
-> `apps/web`（A）与 `packages/teaching`（B）尚未建立。
 
 ## 开发文档留痕
 
@@ -113,29 +101,16 @@ docs/
 
 ## 当前状态
 
-**开发中（第 2 轮）。** 说明书已定稿至 V1.2。
+**骨架可运行。** 说明书已定稿至 V1.2；前后端骨架已搭建，`npm run dev` 可一键启动，接口冒烟测试 29 项通过。
 
-| 模块 | 状态 |
-|---|---|
-| `packages/contracts` | 模型调用接口已冻结；五接口契约待第 3 轮补齐 |
-| `apps/server` 模型适配层 | 已完成，工具链验证通过；**真实模型调用尚未端到端验收** |
-| `apps/server` 五接口与部署 | 未开始 |
-| `apps/web`（A） | 未开始 |
-| `packages/teaching`（B） | 未开始 |
+业务能力尚未实现：真实图文识别、缺口判定的固定规则、以及大部分前端交互仍为占位。
+当前默认运行在 **mock 适配器**下，未接入真实模型。
 
-本仓库中标注为"设计"或"后续迭代"的能力尚未实现，请勿视为已完成功能。
+本仓库中标为"设计"或"后续迭代"的能力，请勿视为已完成功能。
 
 ## 第三方依赖声明
 
-按赛事手册 8.2 要求注明所使用的开源框架与第三方库。
-
-| 依赖 | 版本 | 用途 | 许可 |
-|---|---|---|---|
-| `@tencent-ai/agent-sdk` | ^0.3.259 | 模型推理调用（CodeBuddy Agent SDK） | MIT |
-| `typescript` | ^5.7.2 | 构建与类型检查 | Apache-2.0 |
-| `@types/node` | ^22.10.2 | Node.js 类型定义 | MIT |
-
-前端与教学模块依赖在对应模块建立后补充。
+待实现后补充；将按赛事要求注明所使用的开源框架与第三方库。
 
 ## 开源协议
 

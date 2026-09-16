@@ -4,21 +4,20 @@
  * 用途：在真实密钥下逐条验证三条关键路径，输出脱敏 JSON 便于留痕。
  * 与业务契约无关，不写入任何会话或材料状态。
  *
- * 用法：
- *   node dist/model/smoke.js selfcheck       仅校验配置，不调用模型、不消耗额度
- *   node dist/model/smoke.js text            纯文字调用
- *   node dist/model/smoke.js structured      结构化输出（json_schema）调用
- *   node dist/model/smoke.js image <路径>    含图片调用（PNG/JPEG，≤5MB）
+ * 用法（须在 apps/server 目录下运行，或通过 npm 脚本，因为 .env 在那里）：
+ *   npm run smoke:model:selfcheck     仅校验配置，不调用模型、不消耗额度
+ *   npm run smoke:model:text          纯文字调用
+ *   npm run smoke:model:structured    结构化输出（json_schema）调用
+ *   npm run smoke:model:image <路径>   含图片调用（PNG/JPEG，≤5MB）
  *
- * 密钥由环境变量 CODEBUDDY_API_KEY 提供，脚本不接收密钥参数，也不落盘任何密钥。
+ * 密钥由 apps/server/.env 的 CODEBUDDY_API_KEY 提供；
+ * 脚本不接收密钥参数，也不落盘任何密钥。
  */
 
 import { readFile } from 'node:fs/promises';
-import type { ModelContentBlock, ModelRequest } from '@calc/contracts';
-import {
-  MAX_IMAGE_BYTES,
-  createWorkbuddyModelClient,
-} from './workbuddy.js';
+import type { ModelContentBlock, ModelRequest } from '@lc/contracts';
+import { env } from '../env.js';
+import { MAX_IMAGE_BYTES, createWorkbuddyModelClient } from './workbuddy.js';
 import { ModelError, redact } from './errors.js';
 
 const SYSTEM_PROMPT =
@@ -26,10 +25,10 @@ const SYSTEM_PROMPT =
 
 const USAGE = [
   '用法：',
-  '  node dist/model/smoke.js selfcheck          仅校验配置，不调用模型、不消耗额度',
-  '  node dist/model/smoke.js text               纯文字调用',
-  '  node dist/model/smoke.js structured         结构化输出（json_schema）调用',
-  '  node dist/model/smoke.js image <图片路径>    含图片调用（PNG/JPEG，≤5MB）',
+  '  npm run smoke:model:selfcheck           仅校验配置，不调用模型、不消耗额度',
+  '  npm run smoke:model:text                纯文字调用',
+  '  npm run smoke:model:structured          结构化输出（json_schema）调用',
+  '  npm run smoke:model:image -- <图片路径>  含图片调用（PNG/JPEG，≤5MB）',
 ].join('\n');
 
 /** 按文件头判断图片格式，不信任扩展名 */
@@ -53,9 +52,12 @@ function textRequest(): ModelRequest {
 }
 
 /**
- * 结构化输出路径。schema 采用严格模式惯例：
- * 所有属性都列入 required，并显式关闭 additionalProperties。
- * 这一条通过，意味着 B 的三类来源校验可以用 schema 约束，而不必用正则解析自由文本。
+ * 结构化输出路径。
+ *
+ * 注意：2026-09-16 两次实测确认上游**不兑现** outputFormat，
+ * 所以这条命令的作用是记录"确实没生效、需要提示词兜底"这一事实。
+ * schema 仍按严格模式惯例书写（全字段 required ＋ additionalProperties:false），
+ * 以便将来上游支持时可直接启用。
  */
 function structuredRequest(): ModelRequest {
   return {
@@ -99,12 +101,19 @@ async function imageRequest(imagePath: string): Promise<ModelRequest> {
   return { systemPrompt: SYSTEM_PROMPT, purpose: 'smoke:image', content };
 }
 
+function createClient() {
+  return createWorkbuddyModelClient({
+    apiKey: env.codebuddyApiKey,
+    environment: env.codebuddyEnvironment,
+    timeoutMs: env.modelTimeoutMs,
+    log: (line) => process.stderr.write(`${line}\n`),
+  });
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0] ?? 'selfcheck';
-  const client = createWorkbuddyModelClient({
-    log: (line) => process.stderr.write(`${line}\n`),
-  });
+  const client = createClient();
 
   if (command === 'selfcheck') {
     const check = client.selfCheck();
@@ -141,15 +150,15 @@ async function main(): Promise<void> {
     hadImage: result.hadImage,
     durationMs: result.durationMs,
     usage: result.usage,
-    structuredOutput: result.structuredOutput,
-    text: redact(result.text, [process.env.CODEBUDDY_API_KEY]),
+    structuredOutput: result.structuredOutput ?? null,
+    text: redact(result.text, [env.codebuddyApiKey]),
   };
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   process.stderr.write('调用成功。请人工核对内容；调用成功不等于数学或识别结果已验收。\n');
 }
 
 main().catch((error: unknown) => {
-  const secret = process.env.CODEBUDDY_API_KEY;
+  const secret = env.codebuddyApiKey;
   const payload =
     error instanceof ModelError
       ? { ok: false, code: error.code, message: error.message, detail: error.detail }
