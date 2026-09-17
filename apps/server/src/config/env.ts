@@ -18,6 +18,7 @@
  */
 
 import { config } from 'dotenv';
+import { MODEL_TIMEOUT_MS } from '@lc/contracts';
 
 config();
 
@@ -41,7 +42,7 @@ export interface Env {
 
   /** 实际生效的通道 */
   channel: ModelProvider;
-  /** 模型请求超时（毫秒），默认 60000（说明书 5.3） */
+  /** 单次业务请求的总预算（毫秒），默认取契约常量（说明书 V2.0 §5.2：90 秒，含验证） */
   modelTimeoutMs: number;
 
   /** 默认通道：DeepSeek */
@@ -100,8 +101,9 @@ export function readEnv(): Env {
     nodeEnv: process.env.NODE_ENV ?? 'development',
 
     channel,
-    // 默认 60 秒，对应说明书 5.3；重试须计入同一预算（说明书 V1.4）
-    modelTimeoutMs: readNumber(process.env.MODEL_TIMEOUT_MS, 60_000),
+    // 默认取契约常量（V2.0 §5.2：90 秒，含符号验证）；重试须计入同一预算。
+    // 刻意从 `@lc/contracts` 读默认值而不是再写一个数字 —— 两处各写一遍必然漂移。
+    modelTimeoutMs: readNumber(process.env.MODEL_TIMEOUT_MS, MODEL_TIMEOUT_MS),
 
     deepseekApiKey: readText(process.env.DEEPSEEK_API_KEY),
     deepseekBaseUrl: readText(process.env.DEEPSEEK_BASE_URL) || 'https://api.deepseek.com',

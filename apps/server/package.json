@@ -2,7 +2,7 @@
   "name": "@lc/server",
   "version": "0.1.0",
   "private": true,
-  "description": "服务端：模型适配、会话管理与五个接口",
+  "description": "服务端：模型适配、会话管理、图谱落盘与十个接口",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -14,7 +14,8 @@
     "verify:store": "tsx scripts/verify-knowledge-commit.mjs",
     "verify:errors": "tsx scripts/verify-error-mapping.mjs",
     "verify:guards": "tsx scripts/verify-guards-and-errors.mjs",
-    "verify:all": "npm run verify:store && npm run verify:errors && npm run verify:guards",
+    "verify:graph": "tsx scripts/verify-graph-and-profile.mjs",
+    "verify:all": "npm run verify:store && npm run verify:errors && npm run verify:guards && npm run verify:graph",
     "smoke:model": "tsx src/model/smoke.ts",
     "smoke:model:selfcheck": "tsx src/model/smoke.ts selfcheck",
     "smoke:model:text": "tsx src/model/smoke.ts text",

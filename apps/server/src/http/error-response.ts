@@ -54,6 +54,8 @@ const API_CODE_STATUS: Readonly<Record<ApiErrorCode, number>> = {
   /** 上游故障（认证／额度／请求不合法由具体状态码承载，这里是兜底） */
   MODEL_ERROR: 502,
   MODEL_TIMEOUT: 504,
+  /** 路径存在但功能未交付（如阶段三的教师视图），不得用空数据冒充 */
+  NOT_IMPLEMENTED: 501,
   INTERNAL: 500,
 };
 
