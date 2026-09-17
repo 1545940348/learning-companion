@@ -36,8 +36,25 @@ import { loadProgress, saveProgress } from '../lib/persist';
  *
  * `corrected` 是**纯界面标记**，不进契约：它表示这份原文已被学生就地纠错，
  * 修正后的内容已作为新材料重新提交（用例 E12 的契约限制见 `correctMaterial`）。
+ *
+ * `lowConfidence` 来自 `/api/parse`，用于标注"识别可能不准"（§2.2）。
  */
 export type UiMaterial = Material & { corrected?: boolean };
+
+/** 正在进行的动作。**门控按钮要用 `isBusy(key)`，不要用 `busy`**（见其注释） */
+export type ActionKey = 'knowledge' | 'gap' | 'tutor' | 'quiz' | 'profile';
+
+/**
+ * 上一次失败、且服务端标记为可重试的动作。
+ *
+ * 存**描述符**而不是闭包：闭包会捕获当时的 state（可能已过期），
+ * 而描述符在重放时重新走一遍正常流程，用的是最新状态。
+ */
+export type FailedAction =
+  | { kind: 'knowledge'; texts: string[] }
+  | { kind: 'gap'; conceptId: string; reason: string }
+  | { kind: 'tutor'; question: string; mode: TutorMode }
+  | { kind: 'profile' };
 
 /** 一次缺口补充的结果，按 conceptId 归档（§3.4） */
 export interface GapRecord {
@@ -75,12 +92,30 @@ export interface WorkbenchState {
   history: TutorTurn[];
   profile: LearnerProfile | null;
   notice: Notice | null;
-  busy: null | 'knowledge' | 'gap' | 'tutor' | 'quiz' | 'profile';
+  /**
+   * 最近**开始**的动作，仅用于显示"正在…"的文案。
+   *
+   * ⚠️ **不要用它门控按钮**：它只记录一个值，两个动作先后开始时会被覆盖，
+   * 前一个结束时又会把后一个的忙碌态清掉 —— 这正是原先的缺陷。
+   * 门控一律用 `isBusy(key)` / `anyBusy`。
+   */
+  busy: ActionKey | null;
+  /** 是否有任意动作在进行（按钮是否该灰掉看它） */
+  anyBusy: boolean;
+  /** 是否存在可重试的失败动作 */
+  canRetry: boolean;
+  /** 最近一次 `/api/parse` 报告的、尚未接入的识别通道（如 `['formula']`） */
+  parseUnavailable: string[];
 }
 
 export interface WorkbenchActions {
-  /** 提交材料并重建图谱（可一次传多段） */
-  submitMaterials: (texts: string[]) => Promise<void>;
+  /**
+   * 提交材料并重建图谱（可一次传多段）。
+   *
+   * 返回是否成功 —— 界面据此决定**要不要清空输入框**。
+   * §5.4 要求失败时保留学生的输入，成功才清。
+   */
+  submitMaterials: (texts: string[]) => Promise<boolean>;
   /** 就地纠错：把某份材料改成新文本并重建（用例 E12） */
   correctMaterial: (materialId: string, text: string) => Promise<void>;
   /** 一键补充缺口（§2.3） */
@@ -110,6 +145,15 @@ export interface WorkbenchActions {
   notify: (text: string, kind?: Notice['kind']) => void;
   /** 退出轻路径、进入材料路径：此时才真正创建会话 */
   ensureMaterialSession: () => Promise<string>;
+  /** 指定动作是否正在进行 —— **按钮 disabled 用这个** */
+  isBusy: (key: ActionKey) => boolean;
+  /**
+   * 重放上一次失败的动作（§5.4「可重试并保留输入」）。
+   *
+   * 不覆盖**练习**：`loadQuiz` 的结果由 `QuizPanel` 自己持有，
+   * 在这里重放拿到的题目面板收不到。练习的失败由面板上的「换一组」重试。
+   */
+  retryLastFailed: () => Promise<void>;
 }
 
 function newId(): string {
@@ -145,6 +189,15 @@ export function totalTextLength(materials: { text: string }[]): number {
   return materials.reduce((sum, item) => sum + item.text.length, 0);
 }
 
+/** 动作的中文名，用于"上一个操作还没完成"这类提示 */
+const ACTION_LABELS: Record<ActionKey, string> = {
+  knowledge: '解析材料',
+  gap: '补充缺口',
+  tutor: '解答问题',
+  quiz: '获取练习',
+  profile: '读取画像',
+};
+
 export function useWorkbench(): WorkbenchState & WorkbenchActions {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [materialVersion, setMaterialVersion] = useState(0);
@@ -155,7 +208,10 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
   const [history, setHistory] = useState<TutorTurn[]>([]);
   const [profile, setProfile] = useState<LearnerProfile | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [busy, setBusy] = useState<WorkbenchState['busy']>(null);
+  const [busy, setBusy] = useState<ActionKey | null>(null);
+  const [pending, setPending] = useState<ActionKey[]>([]);
+  const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
+  const [parseUnavailable, setParseUnavailable] = useState<string[]>([]);
 
   /**
    * 版本护栏的锚点。
@@ -165,6 +221,60 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
    */
   const versionRef = useRef(0);
   const sessionRef = useRef<string | null>(null);
+
+  /**
+   * 正在进行中的动作集合。
+   *
+   * 用 ref 作为事实来源：`begin`/`end` 可能在同一次事件里被连续调用，
+   * 只靠 state 会读到上一次渲染的旧值。
+   */
+  const pendingRef = useRef<Set<ActionKey>>(new Set());
+
+  /**
+   * 开始一个动作。**同一时间只允许一个动作修改状态**。
+   *
+   * 为什么单飞：多个动作并行时会各自 `setState` 一大片工作台状态
+   * （材料、版本、图谱、问答历史），互相覆盖后对不上的组合是没法解释的。
+   * 素材解析与缺口补充同时改 `materialVersion` 尤其危险。
+   */
+  const begin = useCallback((key: ActionKey): boolean => {
+    if (pendingRef.current.size > 0) {
+      const running = [...pendingRef.current].map((item) => ACTION_LABELS[item]).join('、');
+      setNotice({
+        kind: 'warn',
+        text: `上一个操作（${running}）还没有完成，请稍候 —— 同时进行多个操作会让状态对不上。`,
+      });
+      return false;
+    }
+    pendingRef.current.add(key);
+    setPending([...pendingRef.current]);
+    setBusy(key);
+    return true;
+  }, []);
+
+  const end = useCallback((key: ActionKey) => {
+    pendingRef.current.delete(key);
+    const remaining = [...pendingRef.current];
+    setPending(remaining);
+    // 清除自己的忙碌态即可；此时按单飞约定 remaining 必为空
+    setBusy((previous) => (previous === key ? null : previous));
+  }, []);
+
+  /** 动作成功后清掉"可重试"标记 */
+  const clearFailure = useCallback(() => setFailedAction(null), []);
+
+  /**
+   * 记录一次失败。**只有服务端说 `retryable` 才允许重试**（§5.4）。
+   *
+   * 不可重试的失败（如 400 入参错误）记下来只会误导学生反复点。
+   */
+  const rememberFailure = useCallback(
+    (action: FailedAction, next: Notice) => {
+      setNotice(next);
+      setFailedAction(next.retryable === true ? action : null);
+    },
+    [],
+  );
 
   /* ---------- 刷新恢复（§5.4：当前标签页保存进度，刷新可恢复） ---------- */
 
@@ -236,39 +346,57 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
   /* ---------- 材料提交 / 图谱重建（§2.2、§2.4） ---------- */
 
   const submitMaterials = useCallback(
-    async (texts: string[]) => {
+    async (texts: string[]): Promise<boolean> => {
       const trimmed = texts.map((text) => text.trim()).filter((text) => text.length > 0);
       if (trimmed.length === 0) {
         setNotice({ kind: 'warn', text: '请先粘贴要解析的内容。' });
-        return;
+        return false;
       }
 
-      const total = totalTextLength(materials) + trimmed.reduce((sum, t) => sum + t.length, 0);
+      const incomingLength = trimmed.reduce((sum, text) => sum + text.length, 0);
+      const total = totalTextLength(materials) + incomingLength;
       if (total > MATERIAL_LIMITS.maxTextLength) {
         setNotice({
           kind: 'error',
           text:
             `材料文本合计不能超过 ${MATERIAL_LIMITS.maxTextLength} 字：` +
-            `已有 ${totalTextLength(materials)} 字，本次 ${trimmed.reduce((s, t) => s + t.length, 0)} 字，` +
+            `已有 ${totalTextLength(materials)} 字，本次 ${incomingLength} 字，` +
             `合计 ${total} 字。请缩短内容或开始新学习。`,
         });
-        return;
+        return false;
       }
 
-      setBusy('knowledge');
+      if (!begin('knowledge')) return false;
       try {
         const id = await ensureMaterialSession();
         const versionAtRequest = versionRef.current;
 
-        const incoming: Material[] = trimmed.map((text) => ({
-          id: newId(),
-          kind: 'upload',
-          text,
-          createdAt: new Date().toISOString(),
-        }));
+        /*
+         * 先过识别层 `/api/parse`（§2.2）。
+         *
+         * 为什么不让前端直接把文本包成 Material：识别层才是产出
+         * 「公式 LaTeX」与「识别可能不准」片段的地方。现在它只回文本，
+         * 但 B5 接入公式识别后，这里不必再改就能把 `lowConfidence` 渲染出来。
+         * 逐条 parse 而不是拼成一条：`lowConfidence` 的偏移量是相对**单份材料**的，
+         * 拼接后偏移会错位。
+         */
+        const unavailable = new Set<string>();
+        const incoming: Material[] = [];
+        for (const text of trimmed) {
+          const parsed = await api.parse({ text });
+          for (const item of parsed.unavailable ?? []) unavailable.add(item);
+          incoming.push({
+            id: newId(),
+            kind: 'upload',
+            text: parsed.text,
+            ...(parsed.lowConfidence.length > 0 ? { lowConfidence: parsed.lowConfidence } : {}),
+            createdAt: new Date().toISOString(),
+          });
+        }
+        setParseUnavailable([...unavailable]);
 
         const result = await api.knowledge({ sessionId: id, materials: incoming });
-        if (!stillCurrent(versionAtRequest)) return;
+        if (!stillCurrent(versionAtRequest)) return false;
 
         setMaterials((previous) => [...previous, ...incoming]);
         applyVersion(result.materialVersion);
@@ -286,13 +414,28 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
           kind: 'info',
           text: `已解析 ${trimmed.length} 段材料，得到 ${result.points.length} 个知识点、${result.prerequisites.length} 条前置关系。`,
         });
+        clearFailure();
+        return true;
       } catch (error) {
-        setNotice(toNotice(error, '材料解析失败，请稍后重试。'));
+        rememberFailure(
+          { kind: 'knowledge', texts: trimmed },
+          toNotice(error, '材料解析失败，请稍后重试。'),
+        );
+        return false;
       } finally {
-        setBusy(null);
+        end('knowledge');
       }
     },
-    [applyVersion, ensureMaterialSession, materials, stillCurrent],
+    [
+      applyVersion,
+      begin,
+      clearFailure,
+      end,
+      ensureMaterialSession,
+      materials,
+      rememberFailure,
+      stillCurrent,
+    ],
   );
 
   /**
@@ -333,7 +476,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
 
   const supplementGap = useCallback(
     async (conceptId: string, reason: string) => {
-      setBusy('gap');
+      if (!begin('gap')) return;
       try {
         const id = await ensureMaterialSession();
         const versionAtRequest = versionRef.current;
@@ -355,6 +498,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
           },
         }));
         applyVersion(result.materialVersion);
+        clearFailure();
         void api
           .profile({
             sessionId: id,
@@ -365,12 +509,15 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
           .then(setProfile)
           .catch(() => undefined);
       } catch (error) {
-        setNotice(toNotice(error, '补充失败，原有材料与状态已保留。'));
+        rememberFailure(
+          { kind: 'gap', conceptId, reason },
+          toNotice(error, '补充失败，原有材料与状态已保留。'),
+        );
       } finally {
-        setBusy(null);
+        end('gap');
       }
     },
-    [applyVersion, ensureMaterialSession, stillCurrent],
+    [applyVersion, begin, clearFailure, end, ensureMaterialSession, rememberFailure, stillCurrent],
   );
 
   const claimKnown = useCallback(
@@ -406,7 +553,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
         return false;
       }
 
-      setBusy('tutor');
+      if (!begin('tutor')) return false;
       try {
         const id = sessionRef.current;
         const versionAtRequest = id ? versionRef.current : 0;
@@ -429,6 +576,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
             at: new Date().toISOString(),
           },
         ]);
+        clearFailure();
 
         if (id) {
           void api
@@ -447,20 +595,23 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
         }
         return true;
       } catch (error) {
-        setNotice(toNotice(error, '解答失败，请稍后重试。你的输入没有被清空。'));
+        rememberFailure(
+          { kind: 'tutor', question: trimmed, mode },
+          toNotice(error, '解答失败，请稍后重试。你的输入没有被清空。'),
+        );
         return false;
       } finally {
-        setBusy(null);
+        end('tutor');
       }
     },
-    [stillCurrent],
+    [begin, clearFailure, end, rememberFailure, stillCurrent],
   );
 
   /* ---------- 练习（§2.6） ---------- */
 
   const loadQuiz = useCallback(
     async (topic: Topic, source: QuizSource): Promise<QuizItem[] | null> => {
-      setBusy('quiz');
+      if (!begin('quiz')) return null;
       try {
         const id = source === 'material' ? await ensureMaterialSession() : undefined;
         const result = await api.quiz({
@@ -468,15 +619,18 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
           source,
           ...(id ? { sessionId: id } : {}),
         });
+        clearFailure();
         return result.items;
       } catch (error) {
+        // 练习的重试不走全局重试：题目列表由 QuizPanel 持有，
+        // 在 hook 里重放拿到的题目面板收不到。面板上的「换一组」就是它的重试。
         setNotice(toNotice(error, '获取练习失败，请稍后重试。'));
         return null;
       } finally {
-        setBusy(null);
+        end('quiz');
       }
     },
-    [ensureMaterialSession],
+    [begin, clearFailure, end, ensureMaterialSession],
   );
 
   /* ---------- 图谱与画像 ---------- */
@@ -527,21 +681,22 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
       setNotice({ kind: 'warn', text: '还未开始材料路径，画像暂无内容。' });
       return;
     }
-    setBusy('profile');
+    if (!begin('profile')) return;
     try {
       const next = await api.profile({ sessionId: id, events: [] });
       setProfile(next);
+      clearFailure();
     } catch (error) {
-      setNotice(toNotice(error, '读取画像失败。'));
+      rememberFailure({ kind: 'profile' }, toNotice(error, '读取画像失败。'));
     } finally {
-      setBusy(null);
+      end('profile');
     }
-  }, []);
+  }, [begin, clearFailure, end, rememberFailure]);
 
   /* ---------- 开始新学习（§2.4） ---------- */
 
   const startNewStudy = useCallback(async () => {
-    setBusy('knowledge');
+    if (!begin('knowledge')) return;
     try {
       const session = await api.createSession();
       sessionRef.current = session.id;
@@ -552,6 +707,8 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
       setGaps({});
       setHistory([]);
       setProfile(null);
+      setParseUnavailable([]);
+      clearFailure();
       setGraph({
         sessionId: session.id,
         materialVersion: session.materialVersion,
@@ -565,17 +722,47 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
         text: '已开始新的学习。材料、图谱与 AI 补充内容都不迁移，之前补过的概念在新会话里仍算「材料未覆盖」。',
       });
     } catch (error) {
+      // 新建会话失败不给「重试」：按钮本来就在，再点一次即可；
+      // 而把 startNewStudy 记进可重试动作会引入自引用（它自己要处理重试）。
       setNotice(toNotice(error, '新建会话失败。'));
     } finally {
-      setBusy(null);
+      end('knowledge');
     }
-  }, [applyVersion]);
+  }, [applyVersion, begin, clearFailure, end]);
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
   const notify = useCallback((text: string, kind: Notice['kind'] = 'info') => {
     setNotice({ kind, text });
   }, []);
+
+  /**
+   * 重放上一次失败的动作（§5.4「可超时可重试并保留输入」）。
+   *
+   * 定义在**所有动作之后**：这样闭包拿到的是它们当前的实现，
+   * 不必用 ref 绕一圈。重放走的是正常流程，用最新状态。
+   */
+  const retryLastFailed = useCallback(async () => {
+    const action = failedAction;
+    if (!action) return;
+    setFailedAction(null);
+    switch (action.kind) {
+      case 'knowledge':
+        await submitMaterials(action.texts);
+        break;
+      case 'gap':
+        await supplementGap(action.conceptId, action.reason);
+        break;
+      case 'tutor':
+        await ask(action.question, action.mode);
+        break;
+      case 'profile':
+        await fetchProfile();
+        break;
+    }
+  }, [ask, failedAction, fetchProfile, submitMaterials, supplementGap]);
+
+  const isBusy = useCallback((key: ActionKey) => pending.includes(key), [pending]);
 
   return {
     sessionId,
@@ -588,6 +775,9 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     profile,
     notice,
     busy,
+    anyBusy: pending.length > 0,
+    canRetry: failedAction !== null,
+    parseUnavailable,
     submitMaterials,
     correctMaterial,
     supplementGap,
@@ -601,6 +791,8 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     dismissNotice,
     notify,
     ensureMaterialSession,
+    isBusy,
+    retryLastFailed,
   };
 }
 

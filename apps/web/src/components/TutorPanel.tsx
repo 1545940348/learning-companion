@@ -12,14 +12,14 @@ import type { AnswerBlock, TutorMode } from '@lc/contracts';
 import type { TutorTurn, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
 import { SCOPE_LABELS, SOURCE_LABELS, TUTOR_MODE_LABELS, VERIFICATION_LABELS, verificationClass } from '../lib/labels';
 
-type Props = { wb: WorkbenchState & WorkbenchActions };
+type Props = { wb: WorkbenchState & WorkbenchActions; mock: boolean };
 
 const MODES: TutorMode[] = ['hint', 'explain', 'full'];
 
-export function TutorPanel({ wb }: Props) {
+export function TutorPanel({ wb, mock }: Props) {
   const [question, setQuestion] = useState('');
   const [mode, setMode] = useState<TutorMode>('hint');
-  const busy = wb.busy === 'tutor';
+  const busy = wb.isBusy('tutor');
   const zeroMaterial = wb.materials.length === 0;
 
   async function handleAsk() {
@@ -72,7 +72,7 @@ export function TutorPanel({ wb }: Props) {
       ) : (
         <div className="turns">
           {[...wb.history].reverse().map((turn) => (
-            <Turn key={turn.id} turn={turn} />
+            <Turn key={turn.id} turn={turn} mock={mock} />
           ))}
         </div>
       )}
@@ -80,7 +80,7 @@ export function TutorPanel({ wb }: Props) {
   );
 }
 
-function Turn({ turn }: { turn: TutorTurn }) {
+function Turn({ turn, mock }: { turn: TutorTurn; mock: boolean }) {
   const [detail, setDetail] = useState<number | null>(null);
 
   return (
@@ -96,6 +96,11 @@ function Turn({ turn }: { turn: TutorTurn }) {
         <span className={turn.answer.basedOnMaterial ? 'tag tag-local' : 'tag tag-pending'}>
           {turn.answer.basedOnMaterial ? '基于你的材料' : '未基于你的材料'}
         </span>
+        {mock && (
+          <span className="tag tag-failed" title="当前是演示通道，回答由固定演示数据生成">
+            mock 演示数据
+          </span>
+        )}
       </div>
 
       {turn.answer.blocks.map((block, index) => (

@@ -65,7 +65,7 @@ export function KnowledgePanel({ wb }: Props) {
                   key={relation.conceptId}
                   relation={relation}
                   gap={wb.gaps[relation.conceptId]}
-                  busy={wb.busy === 'gap'}
+                  busy={wb.isBusy('gap')}
                   onSupplement={() => wb.supplementGap(relation.conceptId, relation.reason)}
                   onClaimKnown={() => wb.claimKnown(relation.conceptId)}
                 />

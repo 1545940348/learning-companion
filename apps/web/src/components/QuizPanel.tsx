@@ -25,7 +25,7 @@ export function QuizPanel({ wb }: Props) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
 
-  const busy = wb.busy === 'quiz';
+  const busy = wb.isBusy('quiz');
 
   async function load() {
     const result = await wb.loadQuiz(topic, source);

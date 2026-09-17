@@ -61,6 +61,17 @@ export function App() {
         </div>
       </header>
 
+      {health?.mock && (
+        <div className="notice notice-warn">
+          <span>
+            <strong>当前是 mock 演示通道。</strong>
+            模型调用没有真正发生 —— 回答与知识点由固定的演示数据生成，用来验证完整链路，
+            <strong>不代表真实模型的输出质量</strong>。服务端配好密钥并设
+            MODEL_PROVIDER=deepseek 后即为真实调用（评委无需自行配置）。
+          </span>
+        </div>
+      )}
+
       {!health?.verification.available && health && (
         <p className="warn-inline">
           符号验证引擎尚未接入，因此所有补充内容与推导一律标为
@@ -71,8 +82,10 @@ export function App() {
       {wb.notice && (
         <div className={`notice notice-${wb.notice.kind}`}>
           <span>{wb.notice.text}</span>
-          {wb.notice.retryable && (
-            <span className="hint-inline">服务端标记本次失败为「可重试」。</span>
+          {wb.canRetry && (
+            <button className="btn btn-sm" onClick={wb.retryLastFailed} disabled={wb.anyBusy}>
+              {wb.anyBusy ? '正在重试…' : '重试'}
+            </button>
           )}
           <button className="link" onClick={wb.dismissNotice}>
             知道了
@@ -82,12 +95,12 @@ export function App() {
 
       <main className="layout">
         <div className="column">
-          <MaterialPanel wb={wb} />
+          <MaterialPanel wb={wb} mock={health?.mock === true} />
           <KnowledgePanel wb={wb} />
           <GraphPanel wb={wb} />
         </div>
         <div className="column">
-          <TutorPanel wb={wb} />
+          <TutorPanel wb={wb} mock={health?.mock === true} />
           <QuizPanel wb={wb} />
           <ProfilePanel wb={wb} />
         </div>

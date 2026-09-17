@@ -52,11 +52,19 @@ const materialText =
 const session = (await call('POST', '/api/session')).json;
 check('① 新建会话 → 空图谱', session.graph.nodes.length === 0 && session.materialVersion === 0);
 
-/* 2. 提交材料并解析（对应「解析这份材料」） */
+/* 2. 先过识别层（对应界面提交前调的 /api/parse），再提交材料 */
+const parsed = (await call('POST', '/api/parse', { text: materialText })).json;
+check('②a 识别接口可用，返回文本与低置信度字段', typeof parsed.text === 'string' && Array.isArray(parsed.lowConfidence));
+check(
+  '②a 未接入的识别通道如实报告（不用占位描述冒充已解析）',
+  Array.isArray(parsed.unavailable) && parsed.unavailable.includes('formula'),
+  parsed.unavailable,
+);
+
 const material = {
   id: 'm-1',
   kind: 'upload',
-  text: materialText,
+  text: parsed.text,
   createdAt: new Date().toISOString(),
 };
 const knowledge = (

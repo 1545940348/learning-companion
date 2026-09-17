@@ -387,6 +387,15 @@ body {
   color: var(--text-muted);
   white-space: pre-wrap;
 }
+
+/* 识别可能不准的片段（§2.2）。浏览器默认的 <mark> 是亮黄底黑字，在深色主题下刺眼 */
+.low-conf {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-bottom: 1px dashed currentColor;
+  padding: 0 1px;
+  border-radius: 2px;
+}
 .material-edit {
   display: flex;
   flex-direction: column;

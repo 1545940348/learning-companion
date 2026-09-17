@@ -30,8 +30,8 @@ export function ProfilePanel({ wb }: Props) {
       ) : (
         <>
           <div className="actions">
-            <button className="btn btn-ghost btn-sm" onClick={wb.fetchProfile} disabled={wb.busy === 'profile'}>
-              {wb.busy === 'profile' ? '读取中…' : '刷新画像'}
+            <button className="btn btn-ghost btn-sm" onClick={wb.fetchProfile} disabled={wb.isBusy('profile')}>
+              {wb.isBusy('profile') ? '读取中…' : '刷新画像'}
             </button>
             <span className="hint-inline">画像只反映本会话，不会跨会话累计。</span>
           </div>
