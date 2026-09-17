@@ -7,6 +7,8 @@
 
 import type {
   ApiErrorBody,
+  GapRequest,
+  GapResponse,
   GraphResponse,
   HealthResponse,
   KnowledgeRequest,
@@ -66,6 +68,10 @@ export const api = {
 
   ask: (payload: TutorRequest) =>
     request<TutorResponse>('/tutor', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 缺口一键补充（§2.3）。学生点击「补上这一段」即视为授权（§4.2） */
+  gap: (payload: GapRequest) =>
+    request<GapResponse>('/gap', { method: 'POST', body: JSON.stringify(payload) }),
 
   /**
    * ⚠️ V2.0 起由 GET 改为 POST（`QuizRequest` 随 body 提交）。
