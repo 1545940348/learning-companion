@@ -98,20 +98,25 @@ packages/contracts  共享契约类型，前后端唯一事实来源
 packages/teaching   教学模块：提示词、依赖判定、缺口补充、校验、题目（B）
 
 docs/
+  README.md       目录导览、命名规范、路径变更映射、断点登记
+  知识库.md        所有长期有效的约定：架构、接口契约、状态机、常量配置、错误码、协作纪律、环境限制
+  todo.md         待办总表：阻断项 / 缺陷 / 计划 / 待确认
+  specs/          ★ 规格与约束正本
+                    微积分学伴_项目说明书.md       工作正本（当前 V2.0）
+                    微积分学伴_初赛补充说明.md     初赛形态/部署/验收口径（补充文件，不替换正本）
+                    大湾区AI_Coding创新大赛_赛事手册.md
+                    赛题意图与产品设计分析.md
   plans/          每轮开发计划
   changelogs/     每轮变更记录
   reviews/        每轮评审记录（含对 AI 输出的否决与修改）
   tech/           技术决策记录
   designs/        设计稿与方案母本（说明书的上游输入）
   archive/        原始交付件留档（.docx 等）
-  README.md       docs 目录导览、命名规范与已知断点登记
-  微积分学伴_项目说明书.md        项目说明书（工作正本，当前 V2.0）
-  大湾区AI_Coding创新大赛_赛事手册.md
-  赛题意图与产品设计分析.md
 ```
 
-> 三份工作正本保留在 `docs/` 根目录，不放子目录：历史 changelog / plan / review 已按
-> `docs/微积分学伴_项目说明书.md` 全路径引用，移动会破坏可溯源链（说明书 §8.2）。
+> **docs 根目录只有三个导航文件**（`README.md` / `知识库.md` / `todo.md`）。
+> 2026-09-17 曾把四份正本从 `docs/` 根移入 `docs/specs/`；历史文档中的旧路径引用
+> **一律不改写**，换算表见 [`docs/README.md`](./docs/README.md) §三。
 
 ## 开发文档留痕
 
@@ -122,7 +127,8 @@ docs/
 - `docs/reviews/` — 每轮结束后：AI 输出核对结果，**必须包含被否决或被修改的记录**
 - `docs/tech/` — 重大决策：选型、契约变更、取舍理由、已知限制
 
-另有 `docs/designs/`（设计稿与方案母本）与 `docs/archive/`（原始交付件留档），
+另有 `docs/designs/`（设计稿与方案母本）与 `docs/archive/`（原始交付件留档）。
+**动手前先看 [`docs/知识库.md`](./docs/知识库.md)，认领任务看 [`docs/todo.md`](./docs/todo.md)。**
 完整导览与已知断点登记见 [`docs/README.md`](./docs/README.md)。
 
 ## 团队分工
