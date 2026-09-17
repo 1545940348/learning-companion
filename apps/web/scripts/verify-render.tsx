@@ -62,6 +62,11 @@ function render(label: string, node: ReactElement): string {
   }
 }
 
+/** 取出图谱节点下方那行状态文案（用于断言节点状态是否如实） */
+function nodeLabels(markup: string): string[] {
+  return [...markup.matchAll(/graph-node-sub"[^>]*>([^<]*)</g)].map((match) => match[1] ?? '');
+}
+
 const noop = async () => {};
 const asyncTrue = async () => true;
 const asyncEmptyItems = async () => [];
@@ -251,6 +256,27 @@ console.log('\n--- 3. 答疑面板：mock 标记与验证状态 ---');
 
   const mocked = render('答疑面板（mock 通道）', <TutorPanel wb={makeWb({ history: [turn] })} mock />);
   check('★ mock 通道下每条回答带「mock 演示数据」标记', mocked.includes('mock 演示数据'), null);
+
+  // I14：被来源校验拦下的块必须如实告知，不得无声消失
+  const dropped: TutorTurn = {
+    ...turn,
+    answer: {
+      ...turn.answer,
+      blocks: [turn.answer.blocks[0]],
+      droppedBlocks: { count: 1, reasons: ['AI 补充内容未经学生授权'] },
+    },
+  };
+  const withDrop = render(
+    '答疑面板（有块被校验丢弃，I14）',
+    <TutorPanel wb={makeWb({ history: [dropped] })} mock={false} />,
+  );
+  check('★ 被拒块的丢弃事实被显示出来', withDrop.includes('本次回答不完整'), null);
+  check(
+    '★ 说明丢了几段、以及被拦的原因',
+    withDrop.includes('另有 1 段内容没有展示') && withDrop.includes('AI 补充内容未经学生授权'),
+    null,
+  );
+  check('★ 没有丢弃时不出现该提示（不制造虚假警报）', !plain.includes('本次回答不完整'));
 }
 
 /* ==================== 4. 图谱 ==================== */
@@ -270,6 +296,13 @@ console.log('\n--- 4. 图谱面板：没有关系边时不凭空连线 ---');
   check('★ 明确说明只有节点、没有关系边', html.includes('没有关系边'), null);
   check('说明界面不会凭空连线', html.includes('不会凭空连线'));
   check('渲染出节点', html.includes('单调性'));
+  // I20①：没有覆盖判定记录的节点**不得**默认显示「材料已覆盖」
+  check(
+    '★ 无判定记录的节点标「未判定」，不冒充「材料已覆盖」（I20①）',
+    nodeLabels(html).length > 0 && nodeLabels(html).every((label) => label === '未判定'),
+    nodeLabels(html),
+  );
+  check('★ 说明「没有做过判定就不算材料已覆盖」', html.includes('没有做过判定就不算'));
 }
 
 /* ==================== 4b. 卡片 ↔ 图谱联动（P-A8） ==================== */
@@ -399,6 +432,73 @@ console.log('\n--- 4c. 图谱有边时的渲染：等 I1 交付后即可用这�
   check('无边时如实说明只有节点', noEdgeHtml.includes('没有关系边'));
 }
 
+/* ==================== 4d. 图谱节点状态取自真实判定（I20①） ==================== */
+
+console.log('\n--- 4d. 图谱节点状态：只显示本会话真的做过的判定（I20①） ---');
+{
+  const graph: GraphNeighborhood = {
+    sessionId: 's-1',
+    materialVersion: 1,
+    rootConceptId: null,
+    nodes: [
+      { id: 'kp-mono', name: '单调性', explanation: '', citations: [], verification: 'unverified' },
+      { id: 'kp-derivative', name: '导数', explanation: '', citations: [], verification: 'unverified' },
+      { id: 'kp-slope', name: '斜率', explanation: '', citations: [], verification: 'unverified' },
+    ],
+    edges: [],
+  };
+  const knowledge = {
+    points: [],
+    prerequisites: [
+      {
+        conceptId: 'kp-mono',
+        conceptName: '单调性',
+        status: 'LOCAL' as const,
+        reason: '材料里有导数的符号说明',
+        evidence: [],
+        verification: 'unverified' as const,
+      },
+      {
+        conceptId: 'kp-derivative',
+        conceptName: '导数',
+        status: 'MISSING' as const,
+        reason: '材料没有导数定义',
+        evidence: [],
+        verification: 'unverified' as const,
+      },
+    ],
+  };
+
+  const html = render('图谱面板（有判定记录）', <GraphPanel wb={makeWb({ graph, knowledge })} />);
+  const labels = nodeLabels(html);
+  check(
+    '★ 节点状态取自 /api/knowledge 的覆盖判定（已覆盖 / 未覆盖 / 未判定 各得其所）',
+    ['材料已覆盖', '材料未覆盖', '未判定'].every((item) => labels.includes(item)),
+    labels,
+  );
+  check('★ 无判定记录的节点仍标「未判定」', labels.filter((item) => item === '未判定').length === 1, labels);
+  check('★ 提示里给出未判定的节点数', html.includes('有 1 个节点本会话没有覆盖判定记录'));
+
+  // 补充记录优先于关系判定：学生刚点过「补上这一段」，状态应立刻跟上
+  const gap: GapRecord = {
+    content: '导数描述瞬时变化率……',
+    supplementBlockId: 'sup-1',
+    status: 'SUPPLEMENTED',
+    verification: 'unverified',
+  };
+  const afterGap = render(
+    '图谱面板（补过缺口后）',
+    <GraphPanel wb={makeWb({ graph, knowledge, gaps: { 'kp-derivative': gap } })} />,
+  );
+  const afterLabels = nodeLabels(afterGap);
+  check('★ 补充记录优先：该节点转为「AI 已补充」', afterLabels.includes('AI 已补充'), afterLabels);
+  check(
+    '★ 未补的节点不受影响（不整片改变状态）',
+    afterLabels.includes('材料已覆盖') && afterLabels.includes('未判定'),
+    afterLabels,
+  );
+}
+
 /* ==================== 5. 练习 ==================== */
 
 console.log('\n--- 5. 练习面板 ---');
@@ -406,6 +506,20 @@ console.log('\n--- 5. 练习面板 ---');
   const html = render('练习面板', <QuizPanel wb={makeWb()} />);
   check('提交前不展示答案的说明存在', html.includes('答案在你提交之前不会显示'));
   check('★ 说明自编题解析不算材料证据', html.includes('不算作你材料的证据'));
+
+  // I20⑥：零材料时不许「按我的材料出题」—— 否则会拿到与材料无关却标着
+  // 「基于你的材料生成」的题（真实性红线）。此分支只能靠点击进入，
+  // 故用 `initialSource` 在 SSR 里直接渲染该状态。
+  const blocked = render(
+    '练习面板（零材料 · 选了按材料出题，I20⑥）',
+    <QuizPanel wb={makeWb({ materials: [] })} initialSource="material" />,
+  );
+  check('★ 零材料时明确说明不能按材料出题', blocked.includes('不能「按我的材料出题」'), null);
+  check(
+    '★ 指出替代路径（先提交讲义 / 改用项目自编题）',
+    blocked.includes('请先在「材料」面板提交讲义') && blocked.includes('项目自编题'),
+  );
+  check('★ 出题按钮被禁用（不是点下去才报错）', /<button class="btn"[^>]*disabled/.test(blocked), null);
 }
 
 /* ==================== 6. 画像 ==================== */
@@ -423,6 +537,19 @@ console.log('\n--- 6. 画像面板 ---');
   check('展示掌握状态', html.includes('AI 已补充'));
   check('★ 说明「我已掌握」不改变材料覆盖状态', html.includes('不会把材料未覆盖改判为已覆盖'));
   check('★ 说明 AI 已补充不等于已验证', html.includes('不等于已验证'));
+
+  // I20⑦：练习提交**不会**写 mastery（服务端 quiz-attempted 落 default 分支），
+  // 因此原文"提交一次练习后就会出现"是撑不住的声明。
+  const empty = render(
+    '画像面板（本会话无掌握条目，I20⑦）',
+    <ProfilePanel
+      wb={makeWb({
+        profile: { sessionId: 's-1', mastery: {}, gaps: [], misconceptions: [], updatedAt: new Date().toISOString() },
+      })}
+    />,
+  );
+  check('★ 如实说明只有「补上这一段」会写入掌握状态', empty.includes('只有「补上这一段」会写入掌握状态'), null);
+  check('★ 不再声称「提交一次练习后就会出现」', !empty.includes('提交一次练习后就会出现'));
 }
 
 /* ==================== 汇总 ==================== */

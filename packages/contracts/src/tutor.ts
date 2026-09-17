@@ -61,6 +61,20 @@ export interface NextStep {
   conceptId?: string;
 }
 
+/**
+ * 被来源校验拦下、因此**没有出现在 `blocks` 里**的回答块。
+ *
+ * 为什么需要它（`I14`）：原先只要还有块通过校验，其余被拒的块就从响应里消失了，
+ * 学生看到的是残缺答案且无从知道 —— 违反「不得静默丢弃」。本字段把丢弃事实如实交出。
+ * 界面**必须**展示它；只加字段而不渲染，等于换个地方继续静默。
+ */
+export interface DroppedBlocks {
+  /** 被拒块的数量 */
+  count: number;
+  /** 去重后的拒绝原因（如「AI 补充内容未经学生授权」） */
+  reasons: string[];
+}
+
 export interface TutorResponse {
   scope: AnswerScope;
   /** 分块回答；片段与来源一一对应 */
@@ -68,6 +82,16 @@ export interface TutorResponse {
   /** 是否基于学生材料作答；轻路径为 false */
   basedOnMaterial: boolean;
   nextStep?: NextStep;
+  /**
+   * 因未通过来源校验而未展示的块（`I14`）。
+   *
+   * **仅在"部分被丢弃"时出现**：若所有块都被拒，服务端直接返回 403 `UNAUTHORIZED_CONTENT`，
+   * 不返回本字段。因此它的存在即表示"本次回答不完整"，界面应显著说明。
+   *
+   * V2.0 契约的**加性可选字段**（2026-09-17 补），旧消费方忽略它即可，
+   * 不构成破坏性变更。
+   */
+  droppedBlocks?: DroppedBlocks;
 }
 
 /** 校验通过的回答块。B 负责结构、编号与摘录匹配校验（说明书 4.3） */

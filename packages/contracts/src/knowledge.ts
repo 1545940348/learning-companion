@@ -145,8 +145,6 @@ export interface SessionGraph {
   edges: GraphEdge[];
 }
 
-export const EMPTY_GRAPH: SessionGraph = { nodes: [], edges: [] };
-
 /** `GET /api/graph` 的响应：以某个知识点为中心的邻域（§2.3 图谱视图） */
 export interface GraphNeighborhood {
   sessionId: string;

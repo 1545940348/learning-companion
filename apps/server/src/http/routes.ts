@@ -369,10 +369,21 @@ apiRouter.post(
       ...(recentAnswers ? { recentAnswers } : {}),
     });
 
-    // 假引用与越权内容不得作为正常答案展示（说明书 4.3、用例 E7）。
-    // 轻路径提问时学生主动提问即为授权，此时由 basedOnMaterial=false 承担标注责任。
+    /*
+     * 假引用与越权内容不得作为正常答案展示（说明书 4.3、用例 E7）。
+     *
+     * ⚠️ 判据是「本次请求是否真的带了可引用的来源」，**不是「会话是否存在」**（`I13`）。
+     * 原先写 `sessionId !== null`：学生点「开始新学习」或「按我的材料出题」之后
+     * 会话已存在但材料为空，此时提问会因"AI 补充内容无授权来源"被 403 且 `retryable=false`
+     * —— 而同一个问题走 `sessionId: null` 却正常。**有会话不等于有材料。**
+     * 零材料时由 `basedOnMaterial === false` 承担标注责任（说明书 2.1）。
+     *
+     * 注：此处 `materials` 已是「学生材料 + 已授权补充块」的切片列表，
+     * 因此它与 `allowedRefs` 同为空／非空 —— 只要存在一个可引用的来源就要求绑定。
+     */
+    const requireAuthorization = materials.length > 0;
     const { valid, rejected } = teaching.validateAnswerBlocks(result.blocks, allowedRefs, {
-      requireAuthorization: sessionId !== null,
+      requireAuthorization,
     });
     if (valid.length === 0 && rejected.length > 0) {
       throw new ApiError(
@@ -386,6 +397,20 @@ apiRouter.post(
       blocks: valid,
       basedOnMaterial: result.basedOnMaterial,
       ...(result.nextStep ? { nextStep: result.nextStep } : {}),
+      /*
+       * `I14`：**有块通过时，其余被拒的块不得无声消失**（§4.3「不静默」）。
+       * 原先只在"全部被拒"时报错，一旦有块通过，被拒块就从响应里消失了 ——
+       * 学生看到的是残缺答案，且无从知道少了一段。
+       * 全部被拒时走上一条 `throw`（403），因此本字段只在"部分被丢弃"时出现。
+       */
+      ...(rejected.length > 0
+        ? {
+            droppedBlocks: {
+              count: rejected.length,
+              reasons: [...new Set(rejected.map((item) => item.reason))],
+            },
+          }
+        : {}),
     };
     res.json(response);
   }),
@@ -493,6 +518,21 @@ apiRouter.post(
     // 按材料出题需要会话上下文（说明书 2.6）
     const sessionId = unwrap(guardNonEmptyText(body.sessionId, 'sessionId'));
     const session = requireSession(sessionId);
+
+    /*
+     * `I20⑥`：会话里**没有材料**时必须拒绝，不能返回标着 `source: 'material'` 的题。
+     *
+     * 原先直接拿空材料去出题，模型侧只是收到「（学生未提供任何材料）」，
+     * 返回的题却被本接口统一标成 `source: 'material'`，前端据此显示
+     * 「基于你的材料生成」—— 而题目与学生的材料毫无关系。**这是真实性红线，不是体验问题。**
+     * 拒绝并说清该怎么做，比给一组"看起来像基于材料"的题更诚实（§9）。
+     */
+    if (session.materials.length === 0) {
+      throw new ApiError(
+        'BAD_REQUEST',
+        '这个学习会话里还没有材料，无法「按我的材料出题」。请先提交讲义，或改用「项目自编题」（不依赖材料）。',
+      );
+    }
 
     const items = await teaching.generateQuizFromMaterial({
       topic,

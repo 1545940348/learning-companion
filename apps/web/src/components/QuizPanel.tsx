@@ -14,18 +14,37 @@ import { FIXED_QUIZ_PER_TOPIC, TOPIC_LABELS } from '@lc/contracts';
 import type { WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
 import { QUIZ_SOURCE_LABELS, VERIFICATION_LABELS, verificationClass } from '../lib/labels';
 
-type Props = { wb: WorkbenchState & WorkbenchActions };
+type Props = {
+  wb: WorkbenchState & WorkbenchActions;
+  /**
+   * 初始的题目来源。
+   *
+   * **仅供 `verify:render` 使用**：`source` 平时只能靠点击切换，而该脚本走
+   * `react-dom/server`、模拟不了交互 —— 于是"零材料时不许按材料出题"这条
+   * 真实性红线的文案就没有任何断言能覆盖（本环境也做不了浏览器验证，见 I8）。
+   * 给学生用的默认值仍是「项目自编题」。
+   */
+  initialSource?: QuizSource;
+};
 
 const TOPICS: Topic[] = ['derivative', 'tangent', 'monotonicity'];
 
-export function QuizPanel({ wb }: Props) {
+export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
   const [topic, setTopic] = useState<Topic>('derivative');
-  const [source, setSource] = useState<QuizSource>('fixed');
+  const [source, setSource] = useState<QuizSource>(initialSource);
   const [items, setItems] = useState<QuizItem[] | null>(null);
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
 
   const busy = wb.isBusy('quiz');
+  /**
+   * 零材料时「按我的材料出题」不可用（`I20⑥`）。
+   *
+   * 原先这条路会**静默建一个空会话**、拿写死的题回来标成「基于你的材料生成」——
+   * 来源声明不成立（§9 真实性红线）。服务端现在也会拒绝（400），
+   * 这里同时把入口关掉并说清原因，不让按钮点下去才报错。
+   */
+  const materialBlocked = source === 'material' && wb.materials.length === 0;
 
   async function load() {
     const result = await wb.loadQuiz(topic, source);
@@ -77,10 +96,18 @@ export function QuizPanel({ wb }: Props) {
             按我的材料出题
           </button>
         </div>
-        <button className="btn" onClick={load} disabled={busy}>
+        <button className="btn" onClick={load} disabled={busy || materialBlocked}>
           {busy ? '正在出题…' : items ? '换一组' : '开始练习'}
         </button>
       </div>
+
+      {materialBlocked && (
+        <p className="warn-inline">
+          还没有可用的材料，因此不能「按我的材料出题」—— 那样只会得到一组与你的材料无关的题，
+          却标着「基于你的材料生成」。请先在「材料」面板提交讲义；也可以改用「项目自编题」，
+          它本来就不依赖材料。
+        </p>
+      )}
 
       {source === 'fixed' && (
         <p className="hint-inline">
@@ -189,8 +216,10 @@ export function QuizPanel({ wb }: Props) {
 
           {submitted && (
             <p className="hint-inline">
-              本次提交已记入画像。错题归因（概念误解 / 计算错误 / 条件遗漏 / 识别错误）尚未实现 ——
-              它需要诊断 Agent 给出可核对的理由，仅凭"答错"就下结论会是编造（§2.6）。
+              本次提交已作为一条画像事件上报（答对 {correct} / {items.length}）。
+              但画像里的「常见误区」不会因为这次提交而新增条目 —— 错题归因（概念误解 / 计算错误 /
+              条件遗漏 / 识别错误）尚未实现，它需要诊断 Agent 给出可核对的理由，
+              仅凭"答错"就下结论会是编造（§2.6）。
             </p>
           )}
         </>

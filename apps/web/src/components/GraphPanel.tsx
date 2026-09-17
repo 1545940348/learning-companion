@@ -7,12 +7,16 @@
  * `edges` 为空 —— 此时界面明确说明"只有节点、没有关系边"，
  * 而不是画一张看起来有结构、实际是前端臆造的图（§9）。
  *
+ * ⚠️ **节点状态同样要如实**（`I20①`）：本会话没有覆盖判定记录的节点标「未判定」，
+ * **不得默认显示「材料已覆盖」** —— 那是一个系统从未做出的判定。
+ *
  * P-A8：选中的知识点与知识卡片**共用同一份状态**（`wb.focusedNodeId`），
  * 卡片上点一下，这里定位并高亮；反过来点节点，卡片也高亮。
  */
 
 import { useEffect, useRef } from 'react';
-import type { WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
+import type { PrerequisiteStatus } from '@lc/contracts';
+import type { GapRecord, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
 import { SOURCE_LABELS, STATUS_LABELS } from '../lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions };
@@ -22,6 +26,30 @@ const NODE_H = 46;
 const GAP_X = 30;
 const GAP_Y = 44;
 
+/** 无覆盖判定记录时的标注 —— 它**不是**六态之一，因为它不是一次判定，而是"没有判定" */
+const UNDETERMINED_LABEL = '未判定';
+
+/**
+ * 取该节点**本会话实际记录**的覆盖状态（`I20①`）。
+ *
+ * 优先用补充记录（学生刚点过「补上这一段」），其次用 `/api/knowledge` 返回的前置关系判定；
+ * 两者都没有就返回 `null`，由调用方如实标注「未判定」。
+ *
+ * 原先写的是 `wb.gaps[node.id]?.status`，缺失时直接显示「材料已覆盖」——
+ * 而 `gaps` 只在点过「补上这一段」之后才有条目，于是**每个节点默认都显示"材料已覆盖"**，
+ * 与同一面板详情里的「暂无引用」自相矛盾（LOCAL 的定义要求"能定位来源"）。
+ */
+function nodeStatus(
+  nodeId: string,
+  gaps: Record<string, GapRecord>,
+  knowledge: WorkbenchState['knowledge'],
+): PrerequisiteStatus | null {
+  const gap = gaps[nodeId];
+  if (gap) return gap.status;
+  const relation = knowledge?.prerequisites.find((item) => item.conceptId === nodeId);
+  return relation ? relation.status : null;
+}
+
 export function GraphPanel({ wb }: Props) {
   const graph = wb.graph;
   const selected = wb.focusedNodeId;
@@ -30,6 +58,7 @@ export function GraphPanel({ wb }: Props) {
   const nodes = graph?.nodes ?? [];
   const edges = graph?.edges ?? [];
   const hasEdges = edges.length > 0;
+  const undetermined = nodes.filter((node) => nodeStatus(node.id, wb.gaps, wb.knowledge) === null).length;
 
   // 布局：按"被依赖的深度"分层。没有边时全部落在第一层，排成一行。
   const depth = computeDepth(nodes.map((node) => node.id), edges);
@@ -106,6 +135,13 @@ export function GraphPanel({ wb }: Props) {
               : '点击节点，或点击上方任意知识点卡片，两边会互相定位与高亮。'}
           </p>
 
+          {undetermined > 0 && (
+            <p className="hint-inline">
+              有 {undetermined} 个节点本会话没有覆盖判定记录，一律标为「{UNDETERMINED_LABEL}」——
+              没有做过判定就不算「材料已覆盖」。
+            </p>
+          )}
+
           <div className="graph-scroll" ref={scrollRef}>
             <svg
               className="graph-svg"
@@ -141,7 +177,7 @@ export function GraphPanel({ wb }: Props) {
               {nodes.map((node) => {
                 const spot = position.get(node.id);
                 if (!spot) return null;
-                const status = wb.gaps[node.id]?.status;
+                const status = nodeStatus(node.id, wb.gaps, wb.knowledge);
                 const isGap = status === 'MISSING' || status === 'PENDING';
                 const isFocused = selected === node.id;
                 const rectClass = [
@@ -169,7 +205,7 @@ export function GraphPanel({ wb }: Props) {
                       {clip(node.name, 11)}
                     </text>
                     <text className="graph-node-sub" x={spot.x + 12} y={spot.y + 36}>
-                      {status ? STATUS_LABELS[status] : '材料已覆盖'}
+                      {status ? STATUS_LABELS[status] : UNDETERMINED_LABEL}
                     </text>
                   </g>
                 );

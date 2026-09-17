@@ -37,7 +37,10 @@ export function ProfilePanel({ wb }: Props) {
           </div>
 
           {mastered.length === 0 ? (
-            <p className="hint">本会话还没有产生画像事件。补充一个前置缺口或提交一次练习后就会出现。</p>
+            <p className="hint">
+              本会话还没有产生掌握状态条目。当前只有「补上这一段」会写入掌握状态与缺口历史
+              —— 练习提交与提问会上报事件，但暂不产生这里的条目（原因见练习面板的说明）。
+            </p>
           ) : (
             <ul className="profile-list">
               {mastered.map(([conceptId, status]) => (
