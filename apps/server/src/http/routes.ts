@@ -38,10 +38,12 @@ import { env } from '../config/env.js';
 import { createModelAdapter } from '../model/index.js';
 import {
   SessionNotFoundError,
-  applyMaterials,
-  applySupplement,
+  SessionVersionConflictError,
   checkMaterialQuota,
+  commitMaterials,
+  commitSupplement,
   createSession,
+  previewMaterials,
   requireSession,
 } from '../store/index.js';
 
@@ -176,10 +178,16 @@ apiRouter.post(
       throw new ApiError('BAD_REQUEST', quotaError);
     }
 
-    // 材料写入失败时不动已有状态（说明书 2.4）
-    const updated = incoming.length > 0 ? applyMaterials(session.id, incoming) : session;
+    // 记下本次分析所基于的版本，提交前要复核（说明书 9.3）
+    const baseVersion = session.materialVersion;
 
-    const result = await teaching.analyzeKnowledge({ materials: toSlices(updated) });
+    // 只构造候选，**不写入存储**：模型失败时材料与版本都不变（说明书 2.4、9.3）
+    const candidate = previewMaterials(session, incoming);
+    const result = await teaching.analyzeKnowledge({ materials: toSlices(candidate) });
+
+    // 复核版本后一次性提交：模型调用期间若有并发请求提交过，这里会拒绝，
+    // 避免用过期状态覆盖新状态（说明书 9.3、C3 验收）
+    const updated = commitMaterials(session.id, incoming, baseVersion);
 
     const response: KnowledgeResponse = {
       sessionId: updated.id,
@@ -251,6 +259,10 @@ apiRouter.post(
     const session = requireSession(body.sessionId);
     assertVersion(session, body.materialVersion);
 
+    // 记下本次生成所基于的版本；模型调用期间（约 1—3 秒）可能有并发请求提交过，
+    // 提交前须复核（说明书 9.3）
+    const baseVersion = session.materialVersion;
+
     const existing = session.supplements.find(
       (supplement) => supplement.conceptId === body.conceptId,
     );
@@ -280,7 +292,8 @@ apiRouter.post(
       content,
       authorizedAt: new Date().toISOString(),
     };
-    const updated = applySupplement(session.id, supplement);
+    // 复核版本后一次性提交：并发旧响应不得覆盖新状态（说明书 9.3）
+    const updated = commitSupplement(session.id, supplement, baseVersion);
 
     const response: GapResponse = {
       content,
@@ -361,6 +374,17 @@ export function errorHandler(
       error: { code: 'NOT_FOUND', message: error.message, retryable: false },
     };
     res.status(404).json(body);
+    return;
+  }
+
+  // 提交前复核版本发现冲突：本次结果基于过期状态，已丢弃（说明书 9.3）
+  // 与 /tutor、/gap 入口处的版本校验同为 SESSION_STALE，前端按 error.code 处理即可；
+  // 这里用 409 而非 400，语义上更准确，且 retryable 为 true（基于最新状态重试）。
+  if (error instanceof SessionVersionConflictError) {
+    const body: ApiErrorBody = {
+      error: { code: 'SESSION_STALE', message: error.message, retryable: true },
+    };
+    res.status(409).json(body);
     return;
   }
 
