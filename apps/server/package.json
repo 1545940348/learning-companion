@@ -13,6 +13,8 @@
     "smoke": "tsx scripts/smoke.mjs",
     "verify:store": "tsx scripts/verify-knowledge-commit.mjs",
     "verify:errors": "tsx scripts/verify-error-mapping.mjs",
+    "verify:guards": "tsx scripts/verify-guards-and-errors.mjs",
+    "verify:all": "npm run verify:store && npm run verify:errors && npm run verify:guards",
     "smoke:model": "tsx src/model/smoke.ts",
     "smoke:model:selfcheck": "tsx src/model/smoke.ts selfcheck",
     "smoke:model:text": "tsx src/model/smoke.ts text",

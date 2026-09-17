@@ -22,12 +22,17 @@
  * - 图片按 OpenAI 兼容惯例以 data URI 放在 `image_url` 里。
  *   **该格式已于 2026-09-17 用真实密钥实测通过**（正确转写 `f(x)=x³−3x` 与临界点 `x=±1`）；
  *   若上游将来变更格式，只需改下面 `toMessages` 一处。
- * - 响应不带模型型号回显，故不提供"实际型号"回读；配置里的 `DEEPSEEK_MODEL` 即调用型号。
+ * - 响应会把实际服务的型号回显在 `model` 字段、用量回显在 `usage` 字段。
+ *   说明书 V1.4 §5.2 要求"**返回值可用时记录实际型号**"，因此两者都记入
+ *   `model.call.meta` 日志；配置里的 `DEEPSEEK_MODEL` 只是**请求**型号，二者未必相同。
+ * - 失败时保留 `error.cause` 链：Node 的 `fetch` 只抛 `TypeError: fetch failed`，
+ *   真正原因（DNS、证书、连接被拒、代理）在 `cause` 上 —— 云端排障全靠它。
  */
 
 import type { ModelCallOptions, ModelInput } from '@lc/teaching';
 import type { ModelErrorCode } from '@lc/contracts';
 import { env } from '../config/env.js';
+import { logger } from '../logger.js';
 import { ModelError, redact } from './errors.js';
 import type { ModelAdapter } from './index.js';
 
@@ -84,6 +89,30 @@ function classifyStatus(status: number): ModelErrorCode {
   return 'INVALID_REQUEST';
 }
 
+/**
+ * 展平错误链。
+ *
+ * `fetch` 失败的报错只有一句 `TypeError: fetch failed`，DNS／证书／连接被拒／代理
+ * 都在 `error.cause` 上。只取 `String(error)` 会让云端排障拿不到任何可用信息，
+ * 而 V1.4 把"云端独立验证"列为唯一挡住交付的事项。
+ */
+function describeError(error: unknown, limit = 4): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < limit && current !== undefined && current !== null; depth += 1) {
+    parts.push(current instanceof Error ? `${current.name}: ${current.message}` : String(current));
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return parts.join(' ← ');
+}
+
+/** 上游响应里本适配器关心的字段（其余不读取） */
+interface ChatCompletionBody {
+  model?: string;
+  usage?: unknown;
+  choices?: { message?: { content?: string } }[];
+}
+
 export function createDeepseekAdapter(): ModelAdapter {
   return {
     name: 'deepseek',
@@ -126,20 +155,30 @@ export function createDeepseekAdapter(): ModelAdapter {
           );
         }
 
-        const data = (await response.json()) as {
-          choices?: { message?: { content?: string } }[];
-        };
+        const data = (await response.json()) as ChatCompletionBody;
         const content = data.choices?.[0]?.message?.content;
         if (!content) {
           throw new ModelError('UPSTREAM', '模型通道返回内容为空。');
         }
+        // 说明书 V1.4 §5.2：返回值可用时记录**实际型号**；用量一并留痕，
+        // 便于核对额度与成本（说明书 5.2 要求确认额度）。实际型号与配置不符时，
+        // 这行日志是唯一能发现的地方 —— 例如上游是网关、把型号名照收不误。
+        logger.info('model.call.meta', {
+          requestedModel: env.deepseekModel,
+          actualModel: data.model,
+          usage: data.usage,
+        });
         return content;
       } catch (error) {
         if (error instanceof ModelError) throw error;
         if (controller.signal.aborted) {
           throw new ModelError('TIMEOUT', `模型通道超过 ${timeoutMs} 毫秒未返回，已中止，可重试。`);
         }
-        throw new ModelError('UPSTREAM', '模型通道调用失败。', redact(error, [env.deepseekApiKey]));
+        throw new ModelError(
+          'UPSTREAM',
+          '模型通道调用失败。',
+          redact(describeError(error), [env.deepseekApiKey]),
+        );
       } finally {
         clearTimeout(timer);
       }

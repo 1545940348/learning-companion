@@ -88,6 +88,10 @@ export function withBudget(
   budget: Budget,
   logger: Logger = defaultLogger,
 ): ModelCaller {
+  // 文案里的秒数取自预算本身，不写死 60 —— 否则把 MODEL_TIMEOUT_MS 调小做验证时，
+  // 日志与前端提示还在说"60 秒"，反而让人以为预算没生效。
+  const budgetSeconds = Math.max(1, Math.round(budget.totalMs / 1000));
+
   return async (input: ModelInput, options?: ModelCallOptions): Promise<string> => {
     // 循环而非递归，次数由 canRetry 控制，最多两轮
     for (;;) {
@@ -95,7 +99,7 @@ export function withBudget(
       if (left <= 0) {
         throw new ModelError(
           'TIMEOUT',
-          '本次请求的 60 秒总预算已用尽，请重试（已保留你的输入）。',
+          `本次请求的 ${budgetSeconds} 秒总预算已用尽，请重试（已保留你的输入）。`,
         );
       }
 

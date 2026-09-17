@@ -54,18 +54,32 @@ export function requireSession(id: string): Session {
   return session;
 }
 
-/** 素材上限校验，超限时由路由返回可读提示（说明书 2.2、用例 E9） */
+/**
+ * 素材上限校验，超限时由路由返回可读提示（说明书 2.2、用例 E9）。
+ *
+ * 提示必须同时给出「已有份数」「本次份数」「合计」，否则学生看到
+ * "最多 3 份材料，当前已有 0 份" 会以为是误报。
+ */
 export function checkMaterialQuota(session: Session, incoming: Material[]): string | null {
   const total = session.materials.length + incoming.length;
   if (total > MATERIAL_LIMITS.maxMaterialsPerSession) {
-    return `每个学习会话最多 ${MATERIAL_LIMITS.maxMaterialsPerSession} 份材料，当前已有 ${session.materials.length} 份。请缩短内容或开始新学习。`;
+    return (
+      `每个学习会话最多 ${MATERIAL_LIMITS.maxMaterialsPerSession} 份材料：` +
+      `当前已有 ${session.materials.length} 份，本次提交 ${incoming.length} 份，合计 ${total} 份。` +
+      '请减少本次份数或开始新学习。'
+    );
   }
   const length = [...session.materials, ...incoming].reduce(
     (sum, material) => sum + material.text.length,
     0,
   );
   if (length > MATERIAL_LIMITS.maxTextLength) {
-    return `材料文本合计不能超过 ${MATERIAL_LIMITS.maxTextLength} 字，当前为 ${length} 字。请缩短内容或开始新学习。`;
+    return (
+      `材料文本合计不能超过 ${MATERIAL_LIMITS.maxTextLength} 字：` +
+      `当前已有 ${session.materials.reduce((sum, material) => sum + material.text.length, 0)} 字，` +
+      `本次提交 ${incoming.reduce((sum, material) => sum + material.text.length, 0)} 字，合计 ${length} 字。` +
+      '请缩短内容或开始新学习。'
+    );
   }
   return null;
 }

@@ -4,10 +4,12 @@
  * 对外只暴露 ModelCaller，教学模块不关心底层是哪家模型。
  *
  * 目录分工：
- * - ./deepseek.ts  默认通道：DeepSeek（说明书 V1.4）
+ * - ./deepseek.ts  默认通道：DeepSeek API（说明书 V1.4）
  * - ./workbuddy.ts SDK 调用细节：超时、密钥脱敏、错误分类
+ * - ./budget.ts    单次业务请求的模型调用预算与受控重试（说明书 V1.4）
  * - ./mock.ts      （仍在下方本文件内）无密钥联调用的假数据
- * - ./codebuddy.ts （仍在下方本文件内）主通道：CodeBuddy Agent SDK
+ * - ./codebuddy.ts （仍在下方本文件内）历史接入：CodeBuddy Agent SDK，须显式设
+ *                  `MODEL_PROVIDER=sdk` 才启用，**不参与自动降级**
  * - ./smoke.ts     冒烟脚本
  */
 
