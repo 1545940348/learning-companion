@@ -47,7 +47,14 @@ export function KnowledgePanel({ wb }: Props) {
         <>
           <div className="card-grid">
             {knowledge.points.map((point) => (
-              <PointCard key={point.id} point={point} />
+              <PointCard
+                key={point.id}
+                point={point}
+                focused={wb.focusedNodeId === point.id}
+                onFocus={() =>
+                  wb.focusNode(wb.focusedNodeId === point.id ? null : point.id)
+                }
+              />
             ))}
           </div>
 
@@ -80,11 +87,19 @@ export function KnowledgePanel({ wb }: Props) {
 
 /* ==================== 知识点卡片 ==================== */
 
-function PointCard({ point }: { point: KnowledgePoint }) {
+function PointCard({
+  point,
+  focused,
+  onFocus,
+}: {
+  point: KnowledgePoint;
+  focused: boolean;
+  onFocus: () => void;
+}) {
   const [openCitation, setOpenCitation] = useState<number | null>(null);
 
   return (
-    <article className="kp-card">
+    <article className={focused ? 'kp-card kp-card-focus' : 'kp-card'}>
       <header className="kp-head">
         <h3>{point.name}</h3>
         <span className={verificationClass(point.verification)}>
@@ -124,6 +139,14 @@ function PointCard({ point }: { point: KnowledgePoint }) {
         openIndex={openCitation}
         onToggle={(index) => setOpenCitation(openCitation === index ? null : index)}
       />
+
+      {/* P-A8：与下方图谱互相定位。纯界面选择，不发请求、不影响六态 */}
+      <div className="kp-actions">
+        <button className="link" onClick={onFocus}>
+          {focused ? '取消图谱高亮' : '在图谱中查看'}
+        </button>
+        <span className="hint-inline">只是定位查看，不改变任何状态</span>
+      </div>
     </article>
   );
 }

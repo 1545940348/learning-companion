@@ -81,6 +81,7 @@ function makeWb(overrides: Partial<WorkbenchState & WorkbenchActions> = {}): Wor
     anyBusy: false,
     canRetry: false,
     parseUnavailable: [],
+    focusedNodeId: null,
     submitMaterials: asyncTrue,
     correctMaterial: noop,
     supplementGap: noop,
@@ -96,6 +97,7 @@ function makeWb(overrides: Partial<WorkbenchState & WorkbenchActions> = {}): Wor
     ensureMaterialSession: async () => 's-1',
     isBusy: () => false,
     retryLastFailed: noop,
+    focusNode: () => {},
     ...overrides,
   };
 }
@@ -268,6 +270,62 @@ console.log('\n--- 4. 图谱面板：没有关系边时不凭空连线 ---');
   check('★ 明确说明只有节点、没有关系边', html.includes('没有关系边'), null);
   check('说明界面不会凭空连线', html.includes('不会凭空连线'));
   check('渲染出节点', html.includes('单调性'));
+}
+
+/* ==================== 4b. 卡片 ↔ 图谱联动（P-A8） ==================== */
+
+console.log('\n--- 4b. 卡片与图谱联动：高亮与定位 ---');
+{
+  const graph: GraphNeighborhood = {
+    sessionId: 's-1',
+    materialVersion: 1,
+    rootConceptId: null,
+    nodes: [
+      { id: 'kp-mono', name: '单调性', explanation: '看 f′(x) 符号。', citations: [], verification: 'unverified' },
+      { id: 'kp-derivative', name: '导数', explanation: '', citations: [], verification: 'unverified' },
+    ],
+    edges: [],
+  };
+  const knowledge = {
+    points: [
+      {
+        id: 'kp-mono',
+        name: '单调性',
+        explanation: 'f′(x) > 0 时递增。',
+        citations: [],
+        verification: 'unverified' as const,
+      },
+    ],
+    prerequisites: [],
+  };
+
+  const idle = render('知识点面板（未选中）', <KnowledgePanel wb={makeWb({ knowledge })} />);
+  check('未选中时给出「在图谱中查看」入口', idle.includes('在图谱中查看'));
+  check('★ 未选中时不带高亮样式', !idle.includes('kp-card-focus'));
+
+  const focused = render(
+    '知识点面板（已选中）',
+    <KnowledgePanel wb={makeWb({ knowledge, focusedNodeId: 'kp-mono' })} />,
+  );
+  check('★ 选中的卡片带高亮样式', focused.includes('kp-card-focus'));
+  check('★ 选中后入口变为「取消图谱高亮」', focused.includes('取消图谱高亮'));
+  check('说明只是定位、不改变状态', focused.includes('不改变任何状态'));
+
+  const graphIdle = render('图谱面板（未选中）', <GraphPanel wb={makeWb({ graph })} />);
+  check('★ 未选中时不给节点加高亮类', !graphIdle.includes('graph-rect-focus'));
+  check('给出联动引导文案', graphIdle.includes('互相定位与高亮'));
+
+  const graphFocused = render('图谱面板（已选中）', <GraphPanel wb={makeWb({ graph, focusedNodeId: 'kp-mono' })} />);
+  check('★ 选中的节点带高亮类', graphFocused.includes('graph-rect-focus'));
+  check('★ 选中后给出「取消选中」出口', graphFocused.includes('取消选中'));
+  check('选中态下仍不凭空连线（无边时不渲染 edge）', !graphFocused.includes('graph-edge'));
+
+  // 选中项不在图谱里：必须如实说明，不能假装定位成功
+  const missing = render(
+    '图谱面板（选中项不在图谱中）',
+    <GraphPanel wb={makeWb({ graph, focusedNodeId: 'kp-not-in-graph' })} />,
+  );
+  check('★ 选中项不在图谱中时如实说明', missing.includes('不在当前图谱的节点里'), null);
 }
 
 /* ==================== 5. 练习 ==================== */

@@ -106,6 +106,13 @@ export interface WorkbenchState {
   canRetry: boolean;
   /** 最近一次 `/api/parse` 报告的、尚未接入的识别通道（如 `['formula']`） */
   parseUnavailable: string[];
+  /**
+   * 当前选中的知识点（图谱高亮 + 知识卡片高亮共用）。`null` 表示没有选中。
+   *
+   * 说明：这只是**界面选择**，不参与六态判定，也不上报服务端 ——
+   * 学生看一眼图谱不应该产生任何模型调用或画像事件。
+   */
+  focusedNodeId: string | null;
 }
 
 export interface WorkbenchActions {
@@ -154,6 +161,12 @@ export interface WorkbenchActions {
    * 在这里重放拿到的题目面板收不到。练习的失败由面板上的「换一组」重试。
    */
   retryLastFailed: () => Promise<void>;
+  /**
+   * 选中 / 取消选中一个知识点（P-A8：卡片 ↔ 图谱联动）。
+   *
+   * 传 `null` 取消选中。点同一个 id 两次由调用方决定语义（面板里是"再点一次取消"）。
+   */
+  focusNode: (knowledgePointId: string | null) => void;
 }
 
 function newId(): string {
@@ -212,6 +225,13 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
   const [pending, setPending] = useState<ActionKey[]>([]);
   const [failedAction, setFailedAction] = useState<FailedAction | null>(null);
   const [parseUnavailable, setParseUnavailable] = useState<string[]>([]);
+  /**
+   * 图谱与知识卡片**共用**的选中知识点（P-A8 联动高亮）。
+   *
+   * 放在状态层而不是面板内部：两个面板是并列的兄弟节点，卡片上的一次点击要让图谱定位过去，
+   * 组件局部 state 传不过去 —— 各存一份必然退化成"两套选择"，点卡片后图谱还停在上一个。
+   */
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
 
   /**
    * 版本护栏的锚点。
@@ -410,6 +430,8 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
         });
         // 材料变了：已有回答的依据可能不再成立（用例 E12）
         setHistory((previous) => previous.map((turn) => ({ ...turn, stale: true })));
+        // 同理，旧的选中项可能已不存在于新图谱里 —— 清掉，避免高亮一个不存在的节点
+        setFocusedNodeId(null);
         setNotice({
           kind: 'info',
           text: `已解析 ${trimmed.length} 段材料，得到 ${result.points.length} 个知识点、${result.prerequisites.length} 条前置关系。`,
@@ -708,6 +730,8 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
       setHistory([]);
       setProfile(null);
       setParseUnavailable([]);
+      // 新会话的图谱是空的，旧的选中项没有任何意义
+      setFocusedNodeId(null);
       clearFailure();
       setGraph({
         sessionId: session.id,
@@ -734,6 +758,16 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
 
   const notify = useCallback((text: string, kind: Notice['kind'] = 'info') => {
     setNotice({ kind, text });
+  }, []);
+
+  /**
+   * 选中一个知识点（P-A8）。
+   *
+   * 纯界面动作：不发请求、不写画像、不产生 notice —— 仅仅是"看一眼"，
+   * 不该有任何副作用，也不该被 `begin`/`end` 的忙碌态门控。
+   */
+  const focusNode = useCallback((knowledgePointId: string | null) => {
+    setFocusedNodeId(knowledgePointId);
   }, []);
 
   /**
@@ -778,6 +812,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     anyBusy: pending.length > 0,
     canRetry: failedAction !== null,
     parseUnavailable,
+    focusedNodeId,
     submitMaterials,
     correctMaterial,
     supplementGap,
@@ -793,6 +828,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     ensureMaterialSession,
     isBusy,
     retryLastFailed,
+    focusNode,
   };
 }
 

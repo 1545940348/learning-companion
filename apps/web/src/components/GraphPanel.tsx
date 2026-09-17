@@ -6,11 +6,14 @@
  * ⚠️ **如实呈现数据现状**：图谱的边由教学模块产出，在其提示词补齐之前
  * `edges` 为空 —— 此时界面明确说明"只有节点、没有关系边"，
  * 而不是画一张看起来有结构、实际是前端臆造的图（§9）。
+ *
+ * P-A8：选中的知识点与知识卡片**共用同一份状态**（`wb.focusedNodeId`），
+ * 卡片上点一下，这里定位并高亮；反过来点节点，卡片也高亮。
  */
 
-import { useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
-import { SOURCE_LABELS, STATUS_LABELS, statusClass } from '../lib/labels';
+import { SOURCE_LABELS, STATUS_LABELS } from '../lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions };
 
@@ -21,7 +24,8 @@ const GAP_Y = 44;
 
 export function GraphPanel({ wb }: Props) {
   const graph = wb.graph;
-  const [selected, setSelected] = useState<string | null>(null);
+  const selected = wb.focusedNodeId;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const nodes = graph?.nodes ?? [];
   const edges = graph?.edges ?? [];
@@ -54,6 +58,26 @@ export function GraphPanel({ wb }: Props) {
 
   const active = selected ? nodes.find((node) => node.id === selected) : undefined;
 
+  /**
+   * 由知识卡片触发的定位：选中项一变，就把它的节点滚进可视区。
+   *
+   * 只在节点存在时滚动 —— 选中了一个不在图谱里的概念时，
+   * 下方给出如实说明，而不是假装滚到某个位置上。
+   */
+  const focusSpot = selected ? position.get(selected) : undefined;
+  const focusX = focusSpot?.x;
+  const focusY = focusSpot?.y;
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (!box || focusX === undefined || focusY === undefined) return;
+    if (typeof box.scrollTo !== 'function') return;
+    box.scrollTo({
+      left: Math.max(0, focusX + NODE_W / 2 - box.clientWidth / 2),
+      top: Math.max(0, focusY + NODE_H / 2 - box.clientHeight / 2),
+      behavior: 'smooth',
+    });
+  }, [focusX, focusY]);
+
   return (
     <section className="panel">
       <header className="panel-head">
@@ -76,7 +100,13 @@ export function GraphPanel({ wb }: Props) {
             </p>
           )}
 
-          <div className="graph-scroll">
+          <p className="hint-inline graph-focus-hint">
+            {selected
+              ? '已选中一个知识点：与上方「知识点与前置依赖」里的卡片互相高亮。'
+              : '点击节点，或点击上方任意知识点卡片，两边会互相定位与高亮。'}
+          </p>
+
+          <div className="graph-scroll" ref={scrollRef}>
             <svg
               className="graph-svg"
               viewBox={`0 0 ${width} ${height}`}
@@ -112,13 +142,20 @@ export function GraphPanel({ wb }: Props) {
                 const spot = position.get(node.id);
                 if (!spot) return null;
                 const status = wb.gaps[node.id]?.status;
-                const cls = status ? statusClass(status) : 'tag tag-local';
                 const isGap = status === 'MISSING' || status === 'PENDING';
+                const isFocused = selected === node.id;
+                const rectClass = [
+                  'graph-rect',
+                  isGap ? 'graph-rect-gap' : '',
+                  isFocused ? 'graph-rect-focus' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ');
                 return (
                   <g
                     key={node.id}
-                    className="graph-node"
-                    onClick={() => setSelected(selected === node.id ? null : node.id)}
+                    className={isFocused ? 'graph-node graph-node-focus' : 'graph-node'}
+                    onClick={() => wb.focusNode(isFocused ? null : node.id)}
                   >
                     <rect
                       x={spot.x}
@@ -126,7 +163,7 @@ export function GraphPanel({ wb }: Props) {
                       width={NODE_W}
                       height={NODE_H}
                       rx={8}
-                      className={isGap ? 'graph-rect graph-rect-gap' : 'graph-rect'}
+                      className={rectClass}
                     />
                     <text className="graph-node-title" x={spot.x + 12} y={spot.y + 20}>
                       {clip(node.name, 11)}
@@ -139,6 +176,13 @@ export function GraphPanel({ wb }: Props) {
               })}
             </svg>
           </div>
+
+          {selected && !active && (
+            <p className="hint-inline">
+              选中的知识点「{selected}」不在当前图谱的节点里，因此没有可定位的位置。
+              图谱只收录本次材料解析出的概念；缺口的完整信息在上方「前置依赖」区。
+            </p>
+          )}
 
           {active && (
             <div className="graph-detail">
@@ -158,6 +202,9 @@ export function GraphPanel({ wb }: Props) {
                       .map((citation) => SOURCE_LABELS[citation.sourceType])
                       .join('、')}
               </p>
+              <button className="link" onClick={() => wb.focusNode(null)}>
+                取消选中
+              </button>
             </div>
           )}
         </>

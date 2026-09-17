@@ -417,6 +417,21 @@ body {
   background: var(--bg);
 }
 
+/* P-A8：被选中的卡片。用内描边而不是外框，避免卡片高度变化导致下方内容跳动 */
+.kp-card-focus {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.kp-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
 .kp-head {
   display: flex;
   justify-content: space-between;
@@ -613,6 +628,20 @@ body {
 .graph-rect-gap {
   stroke: var(--err);
   stroke-dasharray: 4 3;
+}
+
+/* P-A8：卡片 ↔ 图谱联动高亮。
+   只改描边与文字色，**不改尺寸** —— 选中时改宽高会让节点位移，看起来像整个图重排。 */
+.graph-rect-focus {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.graph-node-focus .graph-node-title {
+  fill: var(--accent);
+}
+.graph-focus-hint {
+  display: block;
+  margin: 0 0 8px;
 }
 
 .graph-node-title {
@@ -870,4 +899,53 @@ body {
 .footer-block strong {
   color: var(--text);
   font-weight: 600;
+}
+
+/* ==================== 窄屏与长文本（P-A12） ====================
+   本环境无法做浏览器视觉验证（已知限制 I8），因此这里做的是**代码层防御**：
+   把已知会溢出的位置逐个收住，实测记录见本轮 changelog。
+
+   要防的是这类内容：讲义原文、LaTeX 公式、引用编号、材料 ID ——
+   它们可能是很长一串没有空格的字符，默认断行规则不会在中间断开，于是撑破卡片或整页。
+   用 `anywhere` 而不是 `break-word`：前者同时参与 min-content 计算，
+   否则 flex/grid 容器仍会按"不可断行"来算宽度，等于白设。 */
+
+.kp-explain,
+.kp-formula,
+.kp-conditions,
+.supplement-text,
+.relation-reason,
+.citation-detail,
+.hint,
+.warn-inline,
+.notice {
+  overflow-wrap: anywhere;
+}
+
+code {
+  overflow-wrap: anywhere;
+}
+
+/* 图谱横向滚动是有意设计（节点排布需要宽度），但不能让它把整页撑宽 */
+.graph-scroll {
+  max-width: 100%;
+}
+
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 手机竖屏：单列并收紧留白。窄于此宽度双列已经读不下去，不是"能挤就挤" */
+@media (max-width: 560px) {
+  .page {
+    padding: 18px 12px 36px;
+  }
+  .card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .panel-head {
+    flex-wrap: wrap;
+  }
 }
