@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "smoke": "tsx scripts/smoke.mjs",
     "verify:store": "tsx scripts/verify-knowledge-commit.mjs",
+    "verify:errors": "tsx scripts/verify-error-mapping.mjs",
     "smoke:model": "tsx src/model/smoke.ts",
     "smoke:model:selfcheck": "tsx src/model/smoke.ts selfcheck",
     "smoke:model:text": "tsx src/model/smoke.ts text",

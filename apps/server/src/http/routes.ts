@@ -13,6 +13,7 @@ import {
   createTeachingModule,
   type AllowedRef,
   type MaterialSlice,
+  type TeachingModule,
 } from '@lc/teaching';
 import type {
   ApiErrorBody,
@@ -35,7 +36,10 @@ import type {
 } from '@lc/contracts';
 import { MATERIAL_LIMITS, MATERIAL_QUIZ_PER_TOPIC } from '@lc/contracts';
 import { env } from '../config/env.js';
+import { createBudget, withBudget } from '../model/budget.js';
+import { ModelError } from '../model/errors.js';
 import { createModelAdapter } from '../model/index.js';
+import { mapModelError } from './model-error-map.js';
 import {
   SessionNotFoundError,
   SessionVersionConflictError,
@@ -48,7 +52,18 @@ import {
 } from '../store/index.js';
 
 const adapter = createModelAdapter();
-const teaching = createTeachingModule(adapter.call);
+
+/**
+ * 为**单次业务请求**创建教学模块实例，并挂上 60 秒总预算（说明书 V1.4）。
+ *
+ * 为什么每次请求新建：预算必须随请求走，而预算要作用在模型调用上；
+ * 教学模块正是"调用模型"的那一层，所以由它的调用函数携带预算最直接
+ * （`withBudget` 包装 `ModelCaller`，教学模块代码零改动）。
+ * `createTeachingModule` 只返回一组闭包，创建开销可忽略。
+ */
+function teachingForRequest(): TeachingModule {
+  return createTeachingModule(withBudget(adapter.call, createBudget(env.modelTimeoutMs)));
+}
 
 export class ApiError extends Error {
   constructor(
@@ -169,6 +184,7 @@ apiRouter.post(
 apiRouter.post(
   '/knowledge',
   asyncHandler(async (req, res) => {
+    const teaching = teachingForRequest();
     const body = (req.body ?? {}) as KnowledgeRequest;
     const session = requireSession(body.sessionId);
     const incoming: Material[] = body.materials ?? [];
@@ -204,6 +220,7 @@ apiRouter.post(
 apiRouter.post(
   '/tutor',
   asyncHandler(async (req, res) => {
+    const teaching = teachingForRequest();
     const body = (req.body ?? {}) as TutorRequest;
     const question = (body.question ?? '').trim();
     if (question.length === 0) {
@@ -255,6 +272,7 @@ apiRouter.post(
 apiRouter.post(
   '/gap',
   asyncHandler(async (req, res) => {
+    const teaching = teachingForRequest();
     const body = (req.body ?? {}) as GapRequest;
     const session = requireSession(body.sessionId);
     assertVersion(session, body.materialVersion);
@@ -310,6 +328,7 @@ apiRouter.post(
 apiRouter.get(
   '/quiz',
   asyncHandler(async (req, res) => {
+    const teaching = teachingForRequest();
     const topic = req.query.topic as Topic | undefined;
     if (!topic) {
       throw new ApiError('BAD_REQUEST', '缺少 topic 参数');
@@ -388,7 +407,19 @@ export function errorHandler(
     return;
   }
 
-  // AbortError 由 60 秒超时触发（说明书 5.3）
+  // 模型错误统一映射（说明书 V1.4 第 9.3 节）：
+  // 401 认证 / 429 额度 / 504 超时 / 502 上游 / 400 请求不合法。
+  // 必须放在最后的兜底分支之前，否则模型故障会被一律吞成 500。
+  if (error instanceof ModelError) {
+    const mapped = mapModelError(error.code);
+    const body: ApiErrorBody = {
+      error: { code: mapped.code, message: error.message, retryable: mapped.retryable },
+    };
+    res.status(mapped.status).json(body);
+    return;
+  }
+
+  // 兜底：AbortError 说明确实是超时；其余为未分类的服务器内部错误
   const isTimeout = error instanceof Error && error.name === 'AbortError';
   const body: ApiErrorBody = {
     error: {
