@@ -9,7 +9,7 @@
  *   npm run smoke:model:text          纯文字调用
  *   npm run smoke:model:structured    结构化输出（json_schema）调用
  *   npm run smoke:model:image <路径>   含图片调用（PNG/JPEG，≤5MB）
- *   npm run smoke:model:deepseek        备选通道（第三方）单次文字调用，需 DEEPSEEK_API_KEY
+ *   npm run smoke:model:deepseek        默认通道单次文字调用，需 DEEPSEEK_API_KEY
  *
  * 密钥由 apps/server/.env 提供；脚本不接收密钥参数，也不落盘任何密钥。
  */
@@ -30,7 +30,7 @@ const USAGE = [
   '  npm run smoke:model:text                纯文字调用',
   '  npm run smoke:model:structured          结构化输出（json_schema）调用',
   '  npm run smoke:model:image -- <图片路径>  含图片调用（PNG/JPEG，≤5MB）',
-  '  npm run smoke:model:deepseek            备选通道（第三方）单次文字调用，需 DEEPSEEK_API_KEY',
+  '  npm run smoke:model:deepseek            默认通道单次文字调用，需 DEEPSEEK_API_KEY',
 ].join('\n');
 
 /** 按文件头判断图片格式，不信任扩展名 */
@@ -127,12 +127,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 备选通道单独成一条命令：它绕过工厂、直接构造 DeepSeek 适配器，
+  // 默认通道单独成一条命令：它绕过工厂、直接构造 DeepSeek 适配器，
   // 因此无论 MODEL_PROVIDER 设成什么，都能单独验证这条通道。
   if (command === 'deepseek') {
     const adapter = createDeepseekAdapter();
     process.stderr.write(
-      `开始备选通道调用（模型 ${env.deepseekModel}，最多 60 秒，会产生第三方费用）…\n`,
+      `开始模型通道调用（模型 ${env.deepseekModel}，最多 60 秒，会产生第三方费用）…\n`,
     );
     const startedAt = Date.now();
     const text = await adapter.call(
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
       )}\n`,
     );
     process.stderr.write(
-      '备选通道调用成功。⚠️ 赛题要求最终效果呈现不包含第三方 AI，请勿在演示或评委体验时启用。\n',
+      '模型通道调用成功。DS 为说明书 V1.4 的默认通道；启动日志与 /api/health 均如实报告。\n',
     );
     return;
   }

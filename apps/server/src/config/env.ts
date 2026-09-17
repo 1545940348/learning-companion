@@ -5,12 +5,16 @@
  * 本地开发从 apps/server/.env 读取（cwd 为 apps/server）；
  * 线上部署直接用环境变量注入，不依赖 .env 文件。
  *
- * 主通道：CodeBuddy Agent SDK（见 docs/tech/2026-09-16-模型接入-CodeBuddy Agent SDK.md）。
- * 认证由 SDK 读取环境变量完成，**没有 base URL，也没有固定模型名** ——
- * 模型由上游动态分配（同日实测 hy3 / glm-5.3 / minimax-m3 等多个结果，只能从响应回读），
- * 因此这里没有 MODEL_BASE_URL / MODEL_NAME。
+ * 默认通道：**DeepSeek API**（说明书 V1.4）。
+ * 由 C 维护的 HTTP 适配器 `apps/server/src/model/deepseek.ts` 向 B 提供统一 `ModelCaller`。
  *
- * 备选通道：DeepSeek（第三方）。合规边界见 docs/tech/2026-09-17-模型通道-主路与备选.md。
+ * 历史接入：CodeBuddy Agent SDK（`apps/server/src/model/workbuddy.ts`）。
+ * 代码保留，但**不参与自动降级** —— 必须显式设置 `MODEL_PROVIDER=sdk` 才会启用。
+ *
+ * 说明书 V1.4 的三条硬性要求，本文件逐一落实：
+ * 1. 默认通道为 deepseek（`auto` 档已取消，避免"隐性偏向 SDK"）；
+ * 2. 缺少密钥或模型失败时**明确报错**，不静默切 SDK 或 mock；
+ * 3. 启动日志与 `GET /api/health` 如实报告实际适配器，不把 DS 调用标成 LearnBuddy 能力。
  */
 
 import { config } from 'dotenv';
@@ -21,34 +25,33 @@ config();
 export type CodebuddyEnvironment = 'external' | 'internal' | 'ioa' | 'cloudhosted';
 
 /**
- * 通道选择。
- * - `auto`（默认）：有 LearnBuddy 密钥走主通道，无密钥降级为 mock
- * - `mock`：强制 mock，不调用任何真实模型
- * - `sdk`：强制主通道（LearnBuddy）；无密钥时**不静默降级**
- * - `deepseek`：强制备选通道（第三方）。**最终效果呈现不得启用**，见文件头说明
+ * 模型通道。**没有 `auto` 档** —— 说明书 V1.4 要求默认即为 deepseek，
+ * 而 `auto` 会因有无 SDK 密钥而在两个通道间摇摆，正是 V1.4 要消除的不确定行为。
  */
-export type ModelProvider = 'auto' | 'mock' | 'sdk' | 'deepseek';
+export type ModelProvider = 'deepseek' | 'sdk' | 'mock';
 
-/** 实际生效的通道 */
-export type ModelChannel = 'mock' | 'sdk' | 'deepseek';
+const VALID_PROVIDERS: readonly ModelProvider[] = ['deepseek', 'sdk', 'mock'];
+
+/** 说明书 V1.4：默认通道为 DeepSeek */
+const DEFAULT_PROVIDER: ModelProvider = 'deepseek';
 
 export interface Env {
   port: number;
   nodeEnv: string;
 
-  /** 主通道凭证：参赛账号密钥，仅服务端持有 */
-  codebuddyApiKey: string;
-  codebuddyEnvironment: CodebuddyEnvironment;
+  /** 实际生效的通道 */
+  channel: ModelProvider;
+  /** 模型请求超时（毫秒），默认 60000（说明书 5.3） */
+  modelTimeoutMs: number;
 
-  /** 备选通道（第三方）配置 */
+  /** 默认通道：DeepSeek */
   deepseekApiKey: string;
   deepseekBaseUrl: string;
   deepseekModel: string;
 
-  modelProvider: ModelProvider;
-  modelTimeoutMs: number;
-  /** 实际生效的通道，由模型配置推导 */
-  channel: ModelChannel;
+  /** 历史接入：CodeBuddy Agent SDK */
+  codebuddyApiKey: string;
+  codebuddyEnvironment: CodebuddyEnvironment;
 }
 
 function readNumber(value: string | undefined, fallback: number): number {
@@ -56,8 +59,8 @@ function readNumber(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function readProvider(raw: string | undefined): ModelProvider {
-  return raw === 'mock' || raw === 'sdk' || raw === 'deepseek' || raw === 'auto' ? raw : 'auto';
+function readText(raw: string | undefined): string {
+  return (raw ?? '').trim();
 }
 
 const ENVIRONMENTS: readonly string[] = ['external', 'internal', 'ioa', 'cloudhosted'];
@@ -67,71 +70,91 @@ function readEnvironment(raw: string | undefined): CodebuddyEnvironment {
   return ENVIRONMENTS.includes(value) ? (value as CodebuddyEnvironment) : 'internal';
 }
 
-function readText(raw: string | undefined, fallback: string): string {
+/**
+ * 配置层面的阻塞性问题。
+ *
+ * 与"运行时的模型失败"严格区分：
+ * - 这里是**配置不对**（取值非法、缺密钥）→ 启动时汇总报告，不静默兜底；
+ * - 运行时失败（网络、超时、401）由适配层捕获并抛 ModelError，不会崩主进程。
+ */
+const configProblems: string[] = [];
+
+function readProvider(raw: string | undefined): ModelProvider {
   const value = (raw ?? '').trim();
-  return value.length > 0 ? value : fallback;
+  if (value.length === 0) return DEFAULT_PROVIDER;
+  if ((VALID_PROVIDERS as readonly string[]).includes(value)) return value as ModelProvider;
+
+  configProblems.push(
+    `MODEL_PROVIDER="${value}" 不是有效取值（有效：${VALID_PROVIDERS.join(' / ')}）。` +
+      `说明书 V1.4 起默认即为 deepseek，已取消 auto 档 —— 请显式改为其中之一。`,
+  );
+  return DEFAULT_PROVIDER;
 }
 
 export function readEnv(): Env {
-  const codebuddyApiKey = (process.env.CODEBUDDY_API_KEY ?? '').trim();
-  const deepseekApiKey = (process.env.DEEPSEEK_API_KEY ?? '').trim();
-  const modelProvider = readProvider(process.env.MODEL_PROVIDER);
-
-  // 唯一的隐式降级：auto 且无主通道密钥时走 mock。
-  // 这是为了让 A 在没有密钥的情况下也能独立开发前端（说明书 8.2），
-  // 且降级结果会通过启动日志与 GET /api/health 如实报告，不是"静默"降级。
-  const fallbackChannel: ModelChannel = codebuddyApiKey.length > 0 ? 'sdk' : 'mock';
-  const channel: ModelChannel =
-    modelProvider === 'auto' ? fallbackChannel : modelProvider;
+  const channel = readProvider(process.env.MODEL_PROVIDER);
+  const deepseekModel = readText(process.env.DEEPSEEK_MODEL);
 
   return {
     port: readNumber(process.env.PORT, 3000),
     nodeEnv: process.env.NODE_ENV ?? 'development',
 
-    codebuddyApiKey,
-    codebuddyEnvironment: readEnvironment(process.env.CODEBUDDY_INTERNET_ENVIRONMENT),
-
-    deepseekApiKey,
-    deepseekBaseUrl: readText(process.env.DEEPSEEK_BASE_URL, 'https://api.deepseek.com'),
-    deepseekModel: readText(process.env.DEEPSEEK_MODEL, 'deepseek-flash'),
-
-    modelProvider,
-    // 默认 60 秒，对应说明书 5.3
-    modelTimeoutMs: readNumber(process.env.MODEL_TIMEOUT_MS, 60_000),
     channel,
+    // 默认 60 秒，对应说明书 5.3；重试须计入同一预算（说明书 V1.4）
+    modelTimeoutMs: readNumber(process.env.MODEL_TIMEOUT_MS, 60_000),
+
+    deepseekApiKey: readText(process.env.DEEPSEEK_API_KEY),
+    deepseekBaseUrl: readText(process.env.DEEPSEEK_BASE_URL) || 'https://api.deepseek.com',
+    // 型号必须由配置给出：说明书 V1.4 规定"已有代码中的默认型号不是验证依据"，
+    // 因此这里不再内置型号，避免把未经验证的值当作可用配置。
+    deepseekModel,
+
+    codebuddyApiKey: readText(process.env.CODEBUDDY_API_KEY),
+    codebuddyEnvironment: readEnvironment(process.env.CODEBUDDY_INTERNET_ENVIRONMENT),
   };
 }
 
 export const env = readEnv();
 
 /**
- * 启动日志用。目的是让"本次运行到底用的是哪条通道"一目了然，
- * 避免演示或截图时误把 mock 或第三方通道当成平台能力（说明书 9.2 诚实性要求）。
+ * 启动日志用。让"本次运行的通道"一目了然 ——
+ * 不把 DS 调用标成 LearnBuddy 能力，也不把 mock 说成真实能力（说明书 V1.4、9.2）。
  */
 export function describeModelAdapter(): string {
   switch (env.channel) {
-    case 'sdk':
-      return `model=codebuddy-agent-sdk env=${env.codebuddyEnvironment}`;
     case 'deepseek':
-      return (
-        '⚠️ model=deepseek（第三方通道）—— 赛事方要求最终效果呈现不包含第三方 AI，' +
-        '请勿在演示或评委体验时启用'
-      );
+      return `model=deepseek（默认通道）base=${env.deepseekBaseUrl} id=${env.deepseekModel || '(未配置型号)'}`;
+    case 'sdk':
+      return `model=codebuddy-agent-sdk（历史接入，需显式启用）env=${env.codebuddyEnvironment}`;
     default:
-      return env.modelProvider === 'mock'
-        ? 'model=mock（已按 MODEL_PROVIDER=mock 强制，不调用真实模型）'
-        : 'model=mock（未检测到 CODEBUDDY_API_KEY，已降级，不调用真实模型）';
+      return 'model=mock（仅供本地开发，不调用真实模型）';
   }
 }
 
-/** 启动时的补充警告；无问题时返回空数组 */
-export function modelAdapterWarnings(): string[] {
-  const warnings: string[] = [];
-  if (env.channel === 'deepseek' && !env.deepseekApiKey) {
-    warnings.push('已选择备选通道但未配置 DEEPSEEK_API_KEY，调用会直接失败。');
+/**
+ * 启动前校验。返回**阻塞性问题**清单，空数组表示可以启动。
+ *
+ * 有问题时由调用方（src/index.ts）打印后明确退出 —— 这不是"崩溃"，是配置不完整时的
+ * 主动拒绝启动；按说明书 V1.4，此时不得静默切到 SDK 或 mock。
+ */
+export function validateModelConfig(): string[] {
+  const problems = [...configProblems];
+
+  if (env.channel === 'deepseek') {
+    if (env.deepseekApiKey.length === 0) {
+      problems.push(
+        '缺少 DEEPSEEK_API_KEY，默认通道无法调用。请在 apps/server/.env 配置；' +
+          '若只想本地开发，请显式设 MODEL_PROVIDER=mock。',
+      );
+    }
+    if (env.deepseekModel.length === 0) {
+      problems.push('DEEPSEEK_MODEL 为空，无法确定调用哪个型号。请填写账号下真实可用的型号。');
+    }
   }
-  if (env.channel === 'sdk' && !env.codebuddyApiKey) {
-    warnings.push('已强制主通道但未配置 CODEBUDDY_API_KEY，调用会直接失败（未静默降级）。');
+
+  if (env.channel === 'sdk' && env.codebuddyApiKey.length === 0) {
+    problems.push('已显式启用 sdk 通道，但缺少 CODEBUDDY_API_KEY。');
   }
-  return warnings;
+
+  return problems;
 }

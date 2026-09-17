@@ -50,31 +50,43 @@ apps/server       Node.js + TypeScript    模型适配 / 会话 / 部署
 
 ```bash
 npm install
-npm run dev
-```
-
-默认使用 **mock 适配器**，不配置任何密钥即可跑通完整流程。冒烟测试见 `apps/server/scripts/smoke.mjs`。
-
-接入真实模型时：
-
-```bash
 cp apps/server/.env.example apps/server/.env
-# 编辑 apps/server/.env，填入 CODEBUDDY_API_KEY
+# 编辑 apps/server/.env，填入 DEEPSEEK_API_KEY
+npm run dev
 ```
 
 > 密钥只保存在服务端 `apps/server/.env`，已被 `.gitignore` 排除，**不要提交**。
 > ⚠️ **`apps/server/.env.example` 会随仓库提交、评委可见，请勿在其中填入真实密钥。**
 
-模型推理通过 **CodeBuddy Agent SDK**（`@tencent-ai/agent-sdk`）调用：认证由 SDK 读取环境变量完成，
-**没有 base URL，也没有固定模型名** —— 模型由上游动态分配（同日实测出现过多个不同型号），只能从响应回读。
-选型理由、实测事实与已知限制见 `docs/tech/2026-09-16-模型接入-CodeBuddy Agent SDK.md`。
-
-模型适配层的自检与调用验证：
+**只做本地开发、没有密钥时**，显式启用 mock 即可跑通完整流程（冒烟测试见 `apps/server/scripts/smoke.mjs`）：
 
 ```bash
-npm run smoke:model:selfcheck -w @lc/server                # 仅校验配置，不消耗额度
-npm run smoke:model:text -w @lc/server                     # 纯文字调用
-npm run smoke:model:image -w @lc/server -- <图片路径>       # 含图片调用（PNG/JPEG，≤5MB）
+MODEL_PROVIDER=mock npm run dev -w @lc/server
+```
+
+### 模型通道
+
+| `MODEL_PROVIDER` | 通道 | 说明 |
+|---|---|---|
+| `deepseek`（**默认**） | DeepSeek API | HTTP 适配器，OpenAI 兼容格式。依据说明书 V1.4 |
+| `sdk` | CodeBuddy Agent SDK | **历史接入**，须显式启用，不参与自动降级 |
+| `mock` | 假数据 | 仅供本地开发 |
+
+**三档之间没有任何自动降级，也没有 `auto` 档。** 缺密钥或模型失败时明确报错，
+不静默切换到其他通道。配置不完整时服务**拒绝启动**并打印缺失项。
+
+选型依据、实测事实与历史决策见：
+
+- `docs/tech/2026-09-17-模型通道-主路与备选.md`（含 V1.3 → V1.4 的反转记录）
+- `docs/tech/2026-09-16-模型接入-CodeBuddy Agent SDK.md`
+
+模型通道的自检与调用验证：
+
+```bash
+npm run smoke:model:selfcheck -w @lc/server                # SDK 通道自检，不消耗额度
+npm run smoke:model:text -w @lc/server                     # SDK 通道纯文字调用
+npm run smoke:model:image -w @lc/server -- <图片路径>       # SDK 通道含图片调用（PNG/JPEG，≤5MB）
+npm run smoke:model:deepseek -w @lc/server                 # 默认通道单次文字调用，需 DEEPSEEK_API_KEY
 ```
 
 ## 目录结构
@@ -114,13 +126,17 @@ docs/
 
 ## 当前状态
 
-**骨架可运行。** 说明书已定稿至 V1.2；前后端骨架已搭建，`npm run dev` 可一键启动，接口冒烟测试 29 项通过。
+**骨架可运行。** 说明书已更新至 **V1.4**；前后端骨架已搭建，接口冒烟测试 29 项通过。
 
 业务能力尚未实现：缺口判定的固定规则、按材料出题，以及大部分前端交互仍为占位。
 
-**模型适配层已完成，并通过真实密钥端到端验收**（文字调用与图片调用均实测通过）。
-适配器由 `MODEL_PROVIDER` 控制，默认 `auto`：配置了密钥走真实模型，未配置则降级为 mock。
-若显式设置 `MODEL_PROVIDER=sdk`，无密钥时不会静默降级 —— 避免演示或截图时误把 mock 当成真实能力。
+**模型适配层已完成，两个真实通道均通过真实密钥验收**（文字与图片调用都实测通过）：
+
+- **默认通道 DeepSeek**：文字 1.0 秒、图片 4.1 秒
+- 历史接入 CodeBuddy Agent SDK：文字 12–21 秒、图片 17.7 秒（正是 V1.4 改以 DS 为默认的原因）
+
+通道由 `MODEL_PROVIDER` 控制，默认 `deepseek`。**没有自动降级**：缺密钥或模型失败时明确报错，
+配置不完整时服务拒绝启动并打印缺失项 —— 不静默切换通道。
 
 本仓库中标为"设计"或"后续迭代"的能力，请勿视为已完成功能。
 

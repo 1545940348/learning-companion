@@ -1,22 +1,28 @@
 /**
- * 备选通道：DeepSeek（第三方）
+ * 默认通道：DeepSeek API（说明书 V1.4）
  *
- * ⚠️ 合规边界（赛事方原话）
- * 「本次赛事以腾讯 LearnBuddy 平台为载体，最终效果呈现时最好不要包含第三方 AI」
+ * 由本文件（C 维护的 HTTP 适配器）向 B 提供统一 `ModelCaller`；
+ * 教学模块与接口层不感知底层供应商。
  *
- * 因此本通道有三条硬性约束：
- * 1. **默认不可达** —— 只有显式设置 `MODEL_PROVIDER=deepseek` 才会启用；
- * 2. **不参与自动降级** —— 主通道失败时绝不会自动切到这里，
- *    因为自动切换恰好发生在"要呈现给评委"的那一刻，正好撞在约束上；
- * 3. **启用时喊出来** —— 启动日志打印醒目警告，`GET /api/health` 如实报告
- *    `modelProvider=deepseek` 与 `mock=false`。
+ * ### 依据与边界
  *
- * 定位：本地开发对比、以及在规则允许或需要应急时**手动**启用。
- * 不得用于作品的最终效果呈现（演示、评委体验）。
+ * 选型依据负责人 2026-09-17 最新要求，以及其反馈的**平台调用超时问题**
+ * （SDK 通道实测文字 12–21 秒、图片 17.7 秒，撑不住"30 秒得到解释"的口径）。
+ * 本次调整**替代 V1.3 禁用 DS 的决定**；历史判断与失效记录保留在
+ * `docs/tech/2026-09-17-模型通道-主路与备选.md`，不改写历史。
  *
- * 技术说明：DeepSeek 提供 OpenAI 兼容的 `/chat/completions`。
- * 图片按 OpenAI 兼容惯例以 data URI 放在 `image_url` 里 ——
- * **该格式尚未用真实密钥实测**，若上游返回格式错误，只需改下面 toMessages 一处。
+ * 需明确：本通道**不是**"DS 已通过验收"或"已获赛事许可"的声明。
+ * 负责人转述的赛事方口径（"最终效果呈现时最好不要包含第三方 AI"）与本次选型决策一并保留；
+ * 学生界面不展示供应商品牌，**不等于获得规则豁免**。技术记录、启动日志与
+ * `GET /api/health` 均如实报告 DS，不把 DS 调用标成 LearnBuddy 能力。
+ *
+ * ### 技术说明
+ *
+ * - DeepSeek 提供 OpenAI 兼容的 `POST /chat/completions`。
+ * - 图片按 OpenAI 兼容惯例以 data URI 放在 `image_url` 里。
+ *   **该格式已于 2026-09-17 用真实密钥实测通过**（正确转写 `f(x)=x³−3x` 与临界点 `x=±1`）；
+ *   若上游将来变更格式，只需改下面 `toMessages` 一处。
+ * - 响应不带模型型号回显，故不提供"实际型号"回读；配置里的 `DEEPSEEK_MODEL` 即调用型号。
  */
 
 import type { ModelCallOptions, ModelInput } from '@lc/teaching';
@@ -26,11 +32,12 @@ import { ModelError, redact } from './errors.js';
 import type { ModelAdapter } from './index.js';
 
 /**
- * 与主通道保持一致的 JSON 要求。
+ * JSON 输出要求，注入提示词。
  *
- * 有意不使用 DeepSeek 原生的 `response_format: json_object`：
- * 两条通道对 B 的行为应当一致，而主通道（SDK）无法使用该字段（上游不兑现）。
- * 若将来确认 DS 的该字段稳定可用，可单独为备选通道启用，但需同步更新本注释与文档。
+ * 说明：DeepSeek 支持 `response_format: json_object`，但**尚未独立验证**
+ * （说明书 V1.4 明确要求"DS的JSON输出能力需独立验证"，且不能套用 SDK 的结论）。
+ * 在验证之前不使用该字段 —— 它与提示词方式并存时行为不一致，反而增加不确定性。
+ * 无论是否启用，B 都必须做运行时字段与来源校验。
  */
 const JSON_INSTRUCTION =
   '只输出一个 JSON 对象。不要使用 markdown 代码块包裹，不要输出任何解释文字。';
@@ -85,7 +92,8 @@ export function createDeepseekAdapter(): ModelAdapter {
       if (!env.deepseekApiKey) {
         throw new ModelError(
           'AUTH',
-          '缺少 DEEPSEEK_API_KEY，备选通道无法调用。请在 apps/server/.env 中配置，或改回 MODEL_PROVIDER=auto。',
+          '缺少 DEEPSEEK_API_KEY，默认通道无法调用。请在 apps/server/.env 中配置；' +
+            '若只想本地开发，请显式设 MODEL_PROVIDER=mock。',
         );
       }
 
@@ -113,7 +121,7 @@ export function createDeepseekAdapter(): ModelAdapter {
           const detail = redact(await response.text().catch(() => ''), [env.deepseekApiKey]).slice(0, 500);
           throw new ModelError(
             classifyStatus(response.status),
-            `备选通道返回 ${response.status}`,
+            `模型通道返回 ${response.status}`,
             detail || undefined,
           );
         }
@@ -123,15 +131,15 @@ export function createDeepseekAdapter(): ModelAdapter {
         };
         const content = data.choices?.[0]?.message?.content;
         if (!content) {
-          throw new ModelError('UPSTREAM', '备选通道返回内容为空。');
+          throw new ModelError('UPSTREAM', '模型通道返回内容为空。');
         }
         return content;
       } catch (error) {
         if (error instanceof ModelError) throw error;
         if (controller.signal.aborted) {
-          throw new ModelError('TIMEOUT', `备选通道超过 ${timeoutMs} 毫秒未返回，已中止，可重试。`);
+          throw new ModelError('TIMEOUT', `模型通道超过 ${timeoutMs} 毫秒未返回，已中止，可重试。`);
         }
-        throw new ModelError('UPSTREAM', '备选通道调用失败。', redact(error, [env.deepseekApiKey]));
+        throw new ModelError('UPSTREAM', '模型通道调用失败。', redact(error, [env.deepseekApiKey]));
       } finally {
         clearTimeout(timer);
       }
