@@ -7,11 +7,15 @@
 
 import type {
   ApiErrorBody,
+  GraphResponse,
   HealthResponse,
   KnowledgeRequest,
   KnowledgeResponse,
   ParseRequest,
   ParseResponse,
+  ProfileRequest,
+  ProfileResponse,
+  QuizRequest,
   QuizResponse,
   Session,
   TutorRequest,
@@ -63,11 +67,22 @@ export const api = {
   ask: (payload: TutorRequest) =>
     request<TutorResponse>('/tutor', { method: 'POST', body: JSON.stringify(payload) }),
 
-  quiz: (topic: string, source: 'fixed' | 'material', sessionId?: string) => {
-    const params = new URLSearchParams({ topic, source });
-    if (sessionId) {
-      params.set('sessionId', sessionId);
+  /**
+   * ⚠️ V2.0 起由 GET 改为 POST（`QuizRequest` 随 body 提交）。
+   * 与 `packages/contracts` 的 `QuizRequest` 保持一致，不再拼 query。
+   */
+  quiz: (payload: QuizRequest) =>
+    request<QuizResponse>('/quiz', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 图谱邻域；不传 knowledgePointId 时返回会话图谱全量 */
+  graph: (sessionId: string, knowledgePointId?: string) => {
+    const params = new URLSearchParams({ sessionId });
+    if (knowledgePointId) {
+      params.set('knowledgePointId', knowledgePointId);
     }
-    return request<QuizResponse>(`/quiz?${params.toString()}`);
+    return request<GraphResponse>(`/graph?${params.toString()}`);
   },
+
+  profile: (payload: ProfileRequest) =>
+    request<ProfileResponse>('/profile', { method: 'POST', body: JSON.stringify(payload) }),
 };

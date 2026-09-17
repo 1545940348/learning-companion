@@ -7,14 +7,21 @@
 import type {
   AnswerBlock,
   AnswerScope,
+  Citation,
+  GraphEdge,
   KnowledgePoint,
   NextStep,
   PrerequisiteRelation,
+  PrerequisiteStatus,
   QuizItem,
   RecentAnswer,
+  RelationKind,
+  SessionGraph,
   Topic,
   TutorMode,
+  VerificationStatus,
 } from '@lc/contracts';
+import { DEFAULT_VERIFICATION } from '@lc/contracts';
 import type { ModelCaller } from './model.js';
 import {
   SYSTEM_GAP,
@@ -22,6 +29,176 @@ import {
   SYSTEM_QUIZ_FROM_MATERIAL,
   SYSTEM_TUTOR,
 } from './prompt.js';
+
+/* ==================== 模型输出的归一（V2.0：验证状态 + 图谱） ==================== */
+
+/**
+ * 归一验证状态。
+ *
+ * 模型可能不返回该字段，或返回无法识别的取值。**一律落到 `unverified`**，
+ * 不能落到 `symbolic` —— 说明书 §4.2 要求"必须经过符号验证**或标记为未验证**，
+ * 不得默认视为正确"，缺省落在"已验证"一侧就是把未验证内容当成正确内容。
+ */
+function toVerification(raw: unknown): VerificationStatus {
+  return raw === 'symbolic' || raw === 'human' || raw === 'unverified' || raw === 'failed'
+    ? raw
+    : DEFAULT_VERIFICATION;
+}
+
+const PREREQUISITE_STATUSES: readonly PrerequisiteStatus[] = [
+  'LOCAL',
+  'SUPPLEMENTED',
+  'MISSING',
+  'PENDING',
+  'VERIFIED',
+  'DISPUTED',
+];
+
+function toPrerequisiteStatus(raw: unknown): PrerequisiteStatus {
+  return typeof raw === 'string' && PREREQUISITE_STATUSES.includes(raw as PrerequisiteStatus)
+    ? (raw as PrerequisiteStatus)
+    : 'PENDING';
+}
+
+const RELATION_KINDS: readonly RelationKind[] = [
+  'prerequisite',
+  'derives',
+  'illustrates',
+  'contrasts',
+  'extends',
+  'depends_on',
+];
+
+/** 边界判定取值（说明书 4.1）；用于校验模型输出，避免非法值透传到前端 */
+const ANSWER_SCOPES: readonly AnswerScope[] = [
+  'in-material',
+  'derivable',
+  'missing-prereq',
+  'partial',
+  'out-of-scope',
+  'insufficient-question',
+];
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 把模型返回的知识点补齐必需字段，尤其是验证状态 */
+function normalizePoint(raw: unknown): KnowledgePoint | null {
+  if (!isPlainObject(raw)) return null;
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (id.length === 0) return null;
+
+  const point: KnowledgePoint = {
+    id,
+    name: typeof raw.name === 'string' ? raw.name : id,
+    explanation: typeof raw.explanation === 'string' ? raw.explanation : '',
+    citations: Array.isArray(raw.citations) ? (raw.citations as Citation[]) : [],
+    verification: toVerification(raw.verification),
+  };
+  if (typeof raw.formula === 'string') point.formula = raw.formula;
+  if (typeof raw.conditions === 'string') point.conditions = raw.conditions;
+  if (Array.isArray(raw.misconceptions)) {
+    point.misconceptions = raw.misconceptions.filter(
+      (item): item is string => typeof item === 'string',
+    );
+  }
+  return point;
+}
+
+/** 把模型返回的前置关系补齐必需字段 */
+function normalizePrerequisite(raw: unknown): PrerequisiteRelation | null {
+  if (!isPlainObject(raw)) return null;
+  const conceptId = typeof raw.conceptId === 'string' ? raw.conceptId.trim() : '';
+  if (conceptId.length === 0) return null;
+
+  return {
+    conceptId,
+    conceptName: typeof raw.conceptName === 'string' ? raw.conceptName : conceptId,
+    status: toPrerequisiteStatus(raw.status),
+    reason: typeof raw.reason === 'string' ? raw.reason : '',
+    evidence: Array.isArray(raw.evidence) ? (raw.evidence as Citation[]) : [],
+    verification: toVerification(raw.verification),
+  };
+}
+
+/**
+ * 归一一条关系边。
+ *
+ * 排除**自依赖**（`from === to`）—— 说明书 §3.3 归一阶段要求排除自依赖与循环依赖，
+ * 未通过的关系不得进入图谱（用例 E15）。
+ */
+function normalizeEdge(raw: unknown): GraphEdge | null {
+  if (!isPlainObject(raw)) return null;
+  const from = typeof raw.from === 'string' ? raw.from.trim() : '';
+  const to = typeof raw.to === 'string' ? raw.to.trim() : '';
+  if (from.length === 0 || to.length === 0 || from === to) return null;
+
+  const edge: GraphEdge = {
+    from,
+    to,
+    kind:
+      typeof raw.kind === 'string' && RELATION_KINDS.includes(raw.kind as RelationKind)
+        ? (raw.kind as RelationKind)
+        : 'prerequisite',
+    status: toPrerequisiteStatus(raw.status),
+    reason: typeof raw.reason === 'string' ? raw.reason : '',
+    evidence: Array.isArray(raw.evidence) ? (raw.evidence as Citation[]) : [],
+    verification: toVerification(raw.verification),
+  };
+  if (raw.inferred === true) edge.inferred = true;
+  return edge;
+}
+
+/**
+ * 排除循环依赖（用例 E15）。
+ *
+ * 按顺序保留边，若某条边会让图中出现环则丢弃它 —— 依赖图必须是有向无环的，
+ * 否则后续"从哪个知识点出发找缺口"就没有确定答案。
+ */
+function dropCycles(edges: GraphEdge[]): GraphEdge[] {
+  const kept: GraphEdge[] = [];
+  const adjacency = new Map<string, Set<string>>();
+
+  const reaches = (from: string, target: string): boolean => {
+    const stack = [from];
+    const seen = new Set<string>();
+    while (stack.length > 0) {
+      const node = stack.pop() as string;
+      if (node === target) return true;
+      if (seen.has(node)) continue;
+      seen.add(node);
+      for (const next of adjacency.get(node) ?? []) stack.push(next);
+    }
+    return false;
+  };
+
+  for (const edge of edges) {
+    if (reaches(edge.to, edge.from)) continue;
+    kept.push(edge);
+    const outgoing = adjacency.get(edge.from) ?? new Set<string>();
+    outgoing.add(edge.to);
+    adjacency.set(edge.from, outgoing);
+  }
+  return kept;
+}
+
+/**
+ * 组装图谱快照：节点取自知识点，边取自模型返回的显式关系。
+ *
+ * 模型未返回 `edges` 时**只有节点、没有边** —— 不凭 `prerequisites` 猜 `from`，
+ * 因为"哪个知识点依赖它"是模型该说清的事，猜出来的关系会污染缺口判定。
+ */
+function buildGraph(rawGraph: unknown, points: KnowledgePoint[]): SessionGraph {
+  const source = isPlainObject(rawGraph) ? rawGraph : {};
+  const rawEdges = Array.isArray(source.edges) ? source.edges : [];
+  const edges: GraphEdge[] = [];
+  for (const item of rawEdges) {
+    const edge = normalizeEdge(item);
+    if (edge) edges.push(edge);
+  }
+  return { nodes: points, edges: dropCycles(edges) };
+}
 
 /** 送入模型的材料片段。kind 用于让模型区分讲义与系统补充 */
 export interface MaterialSlice {
@@ -63,6 +240,8 @@ export interface AnalyzeKnowledgeInput {
 export interface AnalyzeKnowledgeOutput {
   points: KnowledgePoint[];
   prerequisites: PrerequisiteRelation[];
+  /** 图谱快照；由服务端与材料一并原子提交（§3.3 步骤 5） */
+  graph: SessionGraph;
 }
 
 export async function analyzeKnowledge(
@@ -74,10 +253,24 @@ export async function analyzeKnowledge(
     json: true,
   });
 
-  const parsed = extractJson(raw) as Partial<AnalyzeKnowledgeOutput>;
+  const parsed = extractJson(raw) as Record<string, unknown>;
+
+  const points: KnowledgePoint[] = [];
+  for (const item of Array.isArray(parsed.points) ? parsed.points : []) {
+    const point = normalizePoint(item);
+    if (point) points.push(point);
+  }
+
+  const prerequisites: PrerequisiteRelation[] = [];
+  for (const item of Array.isArray(parsed.prerequisites) ? parsed.prerequisites : []) {
+    const relation = normalizePrerequisite(item);
+    if (relation) prerequisites.push(relation);
+  }
+
   return {
-    points: parsed.points ?? [],
-    prerequisites: parsed.prerequisites ?? [],
+    points,
+    prerequisites,
+    graph: buildGraph(parsed.graph, points),
   };
 }
 
@@ -128,8 +321,19 @@ export async function generateQuizFromMaterial(
   ].join('\n');
 
   const raw = await call(prompt, { system: SYSTEM_QUIZ_FROM_MATERIAL, json: true });
-  const parsed = extractJson(raw) as { items?: QuizItem[] };
-  return parsed.items ?? [];
+  const parsed = extractJson(raw) as { items?: unknown };
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+
+  const normalized: QuizItem[] = [];
+  for (const item of items) {
+    if (!isPlainObject(item)) continue;
+    normalized.push({
+      ...(item as unknown as QuizItem),
+      // 生成题缺省「未验证」：模型自出的题不等于经验证的题（§4.2）
+      verification: toVerification(item.verification),
+    });
+  }
+  return normalized;
 }
 
 /* ============ 答疑 ============ */
@@ -172,13 +376,38 @@ export async function answerQuestion(
   lines.push('', `学生的问题：${input.question}`);
 
   const raw = await call(lines.join('\n'), { system: SYSTEM_TUTOR, json: true });
-  const parsed = extractJson(raw) as Partial<AnswerQuestionOutput>;
+  const parsed = extractJson(raw) as Record<string, unknown>;
+
+  const blocks: AnswerBlock[] = [];
+  for (const item of Array.isArray(parsed.blocks) ? parsed.blocks : []) {
+    if (!isPlainObject(item)) continue;
+    if (typeof item.content !== 'string' || typeof item.sourceType !== 'string') continue;
+    blocks.push({
+      content: item.content,
+      sourceType: item.sourceType as AnswerBlock['sourceType'],
+      citations: Array.isArray(item.citations) ? (item.citations as Citation[]) : [],
+      // 模型未提供验证状态时落到「未验证」，绝不默认「已验证」（§4.2）
+      verification: toVerification(item.verification),
+    });
+  }
+
+  // scope 决定"要不要提示缺前置/是否越界"，取值非法时不可原样透传给前端：
+  // 落到 'partial' 会让越界问题被当成部分可答，而 'partial' 恰好是最保守的分支
+  // （部分可答必须分开说明），因此作为兜底。
+  const scope: AnswerScope =
+    typeof parsed.scope === 'string' && ANSWER_SCOPES.includes(parsed.scope as AnswerScope)
+      ? (parsed.scope as AnswerScope)
+      : 'partial';
+
+  const nextStep = isPlainObject(parsed.nextStep)
+    ? (parsed.nextStep as unknown as NextStep)
+    : undefined;
 
   return {
-    scope: parsed.scope ?? 'partial',
-    blocks: parsed.blocks ?? [],
+    scope,
+    blocks,
     // 零材料时明确标记未经材料支撑（说明书 2.1）
     basedOnMaterial: input.materials.length > 0,
-    ...(parsed.nextStep ? { nextStep: parsed.nextStep } : {}),
+    ...(nextStep ? { nextStep } : {}),
   };
 }
