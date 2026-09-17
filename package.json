@@ -18,6 +18,7 @@
     "dev:web": "npm run dev -w @lc/web",
     "build": "npm run build -w @lc/server && npm run build -w @lc/web",
     "start": "npm run start -w @lc/server",
+    "pack:deploy": "node scripts/pack-deploy.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present"
   }
 }
