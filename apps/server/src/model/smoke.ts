@@ -9,14 +9,15 @@
  *   npm run smoke:model:text          纯文字调用
  *   npm run smoke:model:structured    结构化输出（json_schema）调用
  *   npm run smoke:model:image <路径>   含图片调用（PNG/JPEG，≤5MB）
+ *   npm run smoke:model:deepseek        备选通道（第三方）单次文字调用，需 DEEPSEEK_API_KEY
  *
- * 密钥由 apps/server/.env 的 CODEBUDDY_API_KEY 提供；
- * 脚本不接收密钥参数，也不落盘任何密钥。
+ * 密钥由 apps/server/.env 提供；脚本不接收密钥参数，也不落盘任何密钥。
  */
 
 import { readFile } from 'node:fs/promises';
 import type { ModelContentBlock, ModelRequest } from '@lc/contracts';
 import { env } from '../config/env.js';
+import { createDeepseekAdapter } from './deepseek.js';
 import { MAX_IMAGE_BYTES, createWorkbuddyModelClient } from './workbuddy.js';
 import { ModelError, redact } from './errors.js';
 
@@ -29,6 +30,7 @@ const USAGE = [
   '  npm run smoke:model:text                纯文字调用',
   '  npm run smoke:model:structured          结构化输出（json_schema）调用',
   '  npm run smoke:model:image -- <图片路径>  含图片调用（PNG/JPEG，≤5MB）',
+  '  npm run smoke:model:deepseek            备选通道（第三方）单次文字调用，需 DEEPSEEK_API_KEY',
 ].join('\n');
 
 /** 按文件头判断图片格式，不信任扩展名 */
@@ -125,6 +127,38 @@ async function main(): Promise<void> {
     return;
   }
 
+  // 备选通道单独成一条命令：它绕过工厂、直接构造 DeepSeek 适配器，
+  // 因此无论 MODEL_PROVIDER 设成什么，都能单独验证这条通道。
+  if (command === 'deepseek') {
+    const adapter = createDeepseekAdapter();
+    process.stderr.write(
+      `开始备选通道调用（模型 ${env.deepseekModel}，最多 60 秒，会产生第三方费用）…\n`,
+    );
+    const startedAt = Date.now();
+    const text = await adapter.call(
+      '请用中文回答：函数 f(x)=x² 在 x=1 处的导数是多少？用一句话说明。',
+      { system: SYSTEM_PROMPT },
+    );
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          command,
+          ok: true,
+          channel: adapter.name,
+          model: env.deepseekModel,
+          durationMs: Date.now() - startedAt,
+          text: redact(text, [env.deepseekApiKey]),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    process.stderr.write(
+      '备选通道调用成功。⚠️ 赛题要求最终效果呈现不包含第三方 AI，请勿在演示或评委体验时启用。\n',
+    );
+    return;
+  }
+
   let request: ModelRequest;
   if (command === 'text') {
     request = textRequest();
@@ -158,11 +192,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  const secret = env.codebuddyApiKey;
+  const secrets = [env.codebuddyApiKey, env.deepseekApiKey];
   const payload =
     error instanceof ModelError
       ? { ok: false, code: error.code, message: error.message, detail: error.detail }
-      : { ok: false, code: 'UNEXPECTED', message: redact(error, [secret]) };
+      : { ok: false, code: 'UNEXPECTED', message: redact(error, secrets) };
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   process.stderr.write('调用未通过。\n');
   process.exitCode = 1;

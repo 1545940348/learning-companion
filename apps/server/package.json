@@ -15,7 +15,8 @@
     "smoke:model:selfcheck": "tsx src/model/smoke.ts selfcheck",
     "smoke:model:text": "tsx src/model/smoke.ts text",
     "smoke:model:structured": "tsx src/model/smoke.ts structured",
-    "smoke:model:image": "tsx src/model/smoke.ts image"
+    "smoke:model:image": "tsx src/model/smoke.ts image",
+    "smoke:model:deepseek": "tsx src/model/smoke.ts deepseek"
   },
   "dependencies": {
     "@lc/contracts": "*",

@@ -6,7 +6,7 @@
  */
 
 import express from 'express';
-import { describeModelAdapter, env } from './config/env.js';
+import { describeModelAdapter, env, modelAdapterWarnings } from './config/env.js';
 import { apiRouter, errorHandler } from './http/routes.js';
 
 const app = express();
@@ -28,6 +28,9 @@ app.use(errorHandler);
 
 app.listen(env.port, () => {
   console.log(`[server] http://localhost:${env.port}`);
-  // 明确打出本次生效的适配器，避免演示或截图时误把 mock 当成真实能力（说明书 9.2）
+  // 明确打出本次生效的适配器，避免演示或截图时误把 mock 或第三方通道当成平台能力（说明书 9.2）
   console.log(`[server] ${describeModelAdapter()}`);
+  for (const warning of modelAdapterWarnings()) {
+    console.warn(`[server] ⚠️ ${warning}`);
+  }
 });
