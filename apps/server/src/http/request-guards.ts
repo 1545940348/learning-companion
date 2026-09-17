@@ -19,7 +19,15 @@
  *   避免为了严格而拦住 A 的正常调用。
  */
 
-import type { Material, MaterialKind, RecentAnswer, Topic, TutorMode } from '@lc/contracts';
+import type {
+  Material,
+  MaterialKind,
+  ProfileEvent,
+  ProfileEventType,
+  RecentAnswer,
+  Topic,
+  TutorMode,
+} from '@lc/contracts';
 import { TOPIC_LABELS } from '@lc/contracts';
 
 export type Guard<T> = { ok: true; value: T } | { ok: false; problem: string };
@@ -176,4 +184,55 @@ export function guardQuizSource(raw: unknown): Guard<'fixed' | 'material'> {
   if (raw === undefined || raw === null || raw === '') return ok('fixed');
   if (raw === 'fixed' || raw === 'material') return ok(raw);
   return fail('source 只允许 fixed / material');
+}
+
+/* ==================== 画像（V2.0 §5.3 POST /api/profile） ==================== */
+
+const PROFILE_EVENT_TYPES: readonly ProfileEventType[] = [
+  'question-asked',
+  'gap-supplemented',
+  'gap-claimed-known',
+  'quiz-attempted',
+  'quiz-attribution',
+];
+
+/**
+ * 画像事件校验。
+ *
+ * 刻意**宽松**：`conceptId`、`at`、`payload` 缺失时由服务端兜底
+ * （`sessionId` 用请求里的、`at` 用服务端时间）。原因是画像只影响引导与统计，
+ * 不是教学结论本身 —— 为了严格而拦住一次问答不值得。
+ * 唯一收紧的是 `type`：取值非法说明调用方理解错了事件语义，必须报 400。
+ */
+export function guardProfileEvents(raw: unknown, sessionId: string): Guard<ProfileEvent[]> {
+  if (raw === undefined || raw === null) return ok([]);
+  if (!Array.isArray(raw)) return fail('events 必须是数组');
+
+  const now = new Date().toISOString();
+  const events: ProfileEvent[] = [];
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const item = raw[index];
+    if (!isPlainObject(item)) return fail(`events[${index}] 必须是对象`);
+
+    const { type, conceptId, at, payload } = item;
+    if (typeof type !== 'string' || !PROFILE_EVENT_TYPES.includes(type as ProfileEventType)) {
+      return fail(`events[${index}].type 只允许 ${PROFILE_EVENT_TYPES.join(' / ')}`);
+    }
+
+    const event: ProfileEvent = {
+      type: type as ProfileEventType,
+      sessionId,
+      at: typeof at === 'string' && at.length > 0 ? at : now,
+    };
+    if (typeof conceptId === 'string' && conceptId.trim().length > 0) {
+      event.conceptId = conceptId.trim();
+    }
+    if (isPlainObject(payload)) {
+      event.payload = payload;
+    }
+    events.push(event);
+  }
+
+  return ok(events);
 }

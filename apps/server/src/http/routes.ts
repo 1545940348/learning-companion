@@ -1,10 +1,11 @@
 /**
- * 接口实现 —— 对应说明书 5.2「首日冻结的契约」
+ * 接口实现 —— 对应说明书 V2.0 §5.3「共享契约」
  *
- * 端点清单：POST /api/session（会话管理）、POST /api/parse、POST /api/knowledge、
- * POST /api/tutor、POST /api/gap、GET /api/quiz、GET /api/health
+ * 端点清单（10 个）：POST /api/session、GET /api/health、POST /api/parse、
+ * POST /api/knowledge、POST /api/tutor、POST /api/gap、POST /api/quiz、
+ * POST /api/profile、GET /api/graph、GET /api/teacher（阶段三，未实现）。
  *
- * ### 本文件的两条硬约定（2026-09-17 收口）
+ * ### 本文件的三条硬约定
  *
  * 1. **错误响应只经 `respond()` 出口**。状态码与 `retryable` 一律查表推导
  *    （http/error-response.ts），不在分支里各自写死 —— 同一个契约错误码必须在
@@ -12,6 +13,8 @@
  * 2. **入参先过形状校验再使用**（http/request-guards.ts）。此前把 `materials`
  *    传成字符串会抛 `TypeError` 落到 500，并把内部实现细节回给客户端；
  *    这类问题属客户端写错请求，应当是 400。
+ * 3. **未接入的能力如实报告，不用占位内容冒充**（§9）。例如 `/api/parse` 在视觉
+ *    通道未接通时返回 `unavailable: ['image']`，而不是一句"图片已接收"的假描述。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -28,16 +31,25 @@ import type {
   ApiErrorBody,
   ApiErrorCode,
   GapResponse,
+  GraphResponse,
   HealthResponse,
   KnowledgeResponse,
   Material,
   ParseResponse,
+  ProfileResponse,
   QuizResponse,
   Session,
   SupplementBlock,
   TutorResponse,
+  VerificationEngineStatus,
+  VerificationStatus,
 } from '@lc/contracts';
-import { MATERIAL_LIMITS, MATERIAL_QUIZ_PER_TOPIC } from '@lc/contracts';
+import {
+  DEFAULT_VERIFICATION,
+  MATERIAL_LIMITS,
+  MATERIAL_QUIZ_PER_TOPIC,
+  MAX_VOICE_SECONDS,
+} from '@lc/contracts';
 import { env } from '../config/env.js';
 import { logger } from '../logger.js';
 import { createBudget, withBudget } from '../model/budget.js';
@@ -56,6 +68,7 @@ import {
   guardNullableSessionId,
   guardNonEmptyText,
   guardOptionalText,
+  guardProfileEvents,
   guardQuestion,
   guardQuizSource,
   guardRecentAnswers,
@@ -68,13 +81,25 @@ import {
   SessionVersionConflictError,
   checkMaterialQuota,
   commitMaterials,
+  commitProfileEvents,
   commitSupplement,
   createSession,
+  getGraphNeighborhood,
   previewMaterials,
   requireSession,
 } from '../store/index.js';
 
 const adapter = createModelAdapter();
+
+/**
+ * 符号验证引擎状态（V2.0 §5.2 要求 `/api/health` 如实报告）。
+ *
+ * ⚠️ `available` 当前固定为 `false`：引擎已选型（`mathjs`，见
+ * `docs/tech/2026-09-17-符号验证引擎选型-纯TS.md`），但 `packages/teaching/src/symbolic.ts`
+ * 尚未实现（B1）。**在实现落地前不得改为 true** —— health 说"验证可用"而实际没有，
+ * 会让评审与前端都判断错。
+ */
+const VERIFICATION_ENGINE: VerificationEngineStatus = { engine: 'mathjs', available: false };
 
 /**
  * 为**单次业务请求**创建教学模块实例，并挂上 60 秒总预算（说明书 V1.4）。
@@ -196,9 +221,10 @@ apiRouter.post('/session', (_req, res) => {
 apiRouter.get('/health', (_req, res) => {
   const body: HealthResponse = {
     ok: true,
-    version: '0.1.0',
+    version: '0.2.0',
     modelProvider: adapter.name,
     mock: adapter.isMock,
+    verification: VERIFICATION_ENGINE,
   };
   res.json(body);
 });
@@ -218,10 +244,14 @@ apiRouter.post(
     if (rawImage !== undefined && typeof rawImage !== 'string') {
       throw new ApiError('BAD_REQUEST', 'imageBase64 必须是字符串');
     }
+    const rawAudio = body.audioBase64;
+    if (rawAudio !== undefined && typeof rawAudio !== 'string') {
+      throw new ApiError('BAD_REQUEST', 'audioBase64 必须是字符串');
+    }
 
     const text = (rawText ?? '').trim();
-    if (text.length === 0 && !rawImage) {
-      throw new ApiError('BAD_REQUEST', '请至少提供文字或一张图片');
+    if (text.length === 0 && !rawImage && !rawAudio) {
+      throw new ApiError('BAD_REQUEST', '请至少提供文字、一张图片或一段语音');
     }
     if (text.length > MATERIAL_LIMITS.maxSingleInputLength) {
       throw new ApiError(
@@ -229,15 +259,32 @@ apiRouter.post(
         `单次输入不能超过 ${MATERIAL_LIMITS.maxSingleInputLength} 字，当前 ${text.length} 字`,
       );
     }
+    if (rawImage && !text) {
+      throw new ApiError(
+        'BAD_REQUEST',
+        `视觉识别尚未接入，无法仅凭图片识别内容。请补上文字描述（图片上限 ${MATERIAL_LIMITS.maxImageBytes / 1024 / 1024} MB）`,
+      );
+    }
+    if (rawAudio && !text) {
+      throw new ApiError(
+        'BAD_REQUEST',
+        `语音转写尚未接入，无法仅凭语音识别内容。请补上文字描述（单段语音上限 ${MAX_VOICE_SECONDS} 秒）`,
+      );
+    }
 
-    // TODO(B)：接入真实图文识别，输出识别文本与低置信度片段
+    // TODO(B5)：接入真实图文语音识别，输出识别文本、公式 LaTeX、图像结构化描述与低置信度片段。
+    // 在接入前，图片与语音**如实报告为未接入**（§9：不以模拟行为冒充真实能力），
+    // 不返回"【占位】图片已接收"这类会被误读为已解析的描述。
+    const unavailable: NonNullable<ParseResponse['unavailable']> = [];
+    if (rawImage) unavailable.push('image');
+    if (rawAudio) unavailable.push('audio');
+    unavailable.push('formula');
+
     const response: ParseResponse = {
       // 识别文本默认可直接使用，不设确认阻断步骤（说明书 2.2）
       text,
       lowConfidence: [],
-      ...(rawImage
-        ? { imageDescription: '【占位】尚未接入真实视觉识别，图片仅记录为已接收。' }
-        : {}),
+      ...(unavailable.length > 0 ? { unavailable } : {}),
     };
     res.json(response);
   }),
@@ -265,15 +312,18 @@ apiRouter.post(
     const candidate = previewMaterials(session, incoming);
     const result = await teaching.analyzeKnowledge({ materials: toSlices(candidate) });
 
-    // 复核版本后一次性提交：模型调用期间若有并发请求提交过，这里会拒绝，
-    // 避免用过期状态覆盖新状态（说明书 9.3、C3 验收）
-    const updated = commitMaterials(session.id, incoming, baseVersion);
+    // 复核版本后一次性提交：**材料与图谱在同一次 CAS 中写入**（§3.3 步骤 5）。
+    // 模型调用期间若有并发请求提交过，这里会拒绝，避免用过期状态覆盖新状态。
+    const updated = commitMaterials(session.id, incoming, baseVersion, result.graph);
 
     const response: KnowledgeResponse = {
       sessionId: updated.id,
       materialVersion: updated.materialVersion,
       points: result.points,
       prerequisites: result.prerequisites,
+      // 返回**实际落盘**的图谱，而不是模型刚给的候选：
+      // 二者在"图谱为空时不清空旧图谱"的情形下会不同，前端应按落盘结果渲染。
+      graph: updated.graph,
     };
     res.json(response);
   }),
@@ -366,6 +416,8 @@ apiRouter.post(
         content: existing.content,
         supplementBlockId: existing.id,
         status: 'SUPPLEMENTED',
+        // 已有补充块若当时未通过验证，重放时也必须如实说「未验证」（§4.2）
+        verification: existing.verification ?? DEFAULT_VERIFICATION,
         materialVersion: session.materialVersion,
       };
       res.json(response);
@@ -379,51 +431,64 @@ apiRouter.post(
       materials: toSlices(session),
     });
 
+    /**
+     * 补充内容的验证状态。
+     *
+     * ⚠️ 在 B1（符号验证）落地前**只能**是 `unverified`，且状态停在 `SUPPLEMENTED`，
+     * 不得直接跳到 `VERIFIED` —— §4.2 规定"补充内容必须经过符号验证或标记为未验证，
+     * 不得默认视为正确"。
+     */
+    const verification: VerificationStatus = DEFAULT_VERIFICATION;
+
     const supplement: SupplementBlock = {
       id: randomUUID(),
       sessionId: session.id,
       conceptId,
       content,
       authorizedAt: new Date().toISOString(),
+      verification,
     };
-    // 复核版本后一次性提交：并发旧响应不得覆盖新状态（说明书 9.3）
-    const updated = commitSupplement(session.id, supplement, baseVersion);
+    // 复核版本后一次性提交：并发旧响应不得覆盖新状态
+    const updated = commitSupplement(session.id, supplement, baseVersion, 'SUPPLEMENTED');
 
     const response: GapResponse = {
       content,
       supplementBlockId: supplement.id,
       status: 'SUPPLEMENTED',
+      verification,
       materialVersion: updated.materialVersion,
     };
     res.json(response);
   }),
 );
 
-/* ==================== GET /api/quiz ==================== */
+/* ==================== POST /api/quiz ==================== */
 
-apiRouter.get(
+/**
+ * ⚠️ V2.0 起由 `GET /api/quiz?topic=&source=` 改为 `POST`（§5.3）。
+ * 入参不再是 query 而是 body，A 侧调用须同批改造。
+ */
+apiRouter.post(
   '/quiz',
   asyncHandler(async (req, res) => {
     const teaching = teachingForRequest();
+    const body = readBody(req);
+
     // 课程范围严格限定为三个主题：非法取值直接报错，不返回空题集（说明书 2.6）
-    const topic = unwrap(guardTopic(req.query.topic));
-    const source = unwrap(guardQuizSource(req.query.source));
+    const topic = unwrap(guardTopic(body.topic));
+    const source = unwrap(guardQuizSource(body.source));
 
     if (source === 'fixed') {
-      const response: QuizResponse = { items: FIXED_QUIZ[topic] ?? [] };
+      const response: QuizResponse = {
+        // 自编固定题经人工核验，验证状态标 human（§7.1 固定题须人工核验 + 符号验证）
+        items: (FIXED_QUIZ[topic] ?? []).map((item) => ({ ...item, verification: 'human' })),
+      };
       res.json(response);
       return;
     }
 
     // 按材料出题需要会话上下文（说明书 2.6）
-    const rawSessionId = req.query.sessionId;
-    const sessionId =
-      rawSessionId === undefined
-        ? undefined
-        : unwrap(guardNonEmptyText(rawSessionId, 'sessionId'));
-    if (!sessionId) {
-      throw new ApiError('BAD_REQUEST', '按材料出题需要提供 sessionId');
-    }
+    const sessionId = unwrap(guardNonEmptyText(body.sessionId, 'sessionId'));
     const session = requireSession(sessionId);
 
     const items = await teaching.generateQuizFromMaterial({
@@ -439,11 +504,80 @@ apiRouter.get(
         topic,
         // 必须标注来源，不能伪装成上传讲义原题（说明书 2.6）
         source: 'material',
+        // 生成题缺省「未验证」（§4.2）
+        verification: item.verification ?? DEFAULT_VERIFICATION,
       })),
     };
     res.json(response);
   }),
 );
+
+/* ==================== GET /api/graph ==================== */
+
+/**
+ * 图谱邻域（§2.3 图谱视图）。
+ *
+ * 数据来自会话里**已落盘**的图谱 —— 这正是 C1 要解决的问题：
+ * 在此之前 `/api/knowledge` 算完即丢，本接口无数据可读。
+ * 只做一层邻域展开，不做多跳递归（§3.6 不扩展到全课程网络）。
+ */
+apiRouter.get(
+  '/graph',
+  asyncHandler(async (req, res) => {
+    const sessionId = unwrap(guardNonEmptyText(req.query.sessionId, 'sessionId'));
+    const knowledgePointId = unwrap(
+      guardOptionalText(req.query.knowledgePointId, 'knowledgePointId'),
+    );
+
+    const session = requireSession(sessionId);
+    const neighborhood = getGraphNeighborhood(session, knowledgePointId ?? null);
+
+    const response: GraphResponse = neighborhood;
+    res.json(response);
+  }),
+);
+
+/* ==================== POST /api/profile ==================== */
+
+/**
+ * 提交画像事件，取回更新后的画像（§5.3）。
+ *
+ * 只做会话内聚合（阶段二「画像基础版」）。注意两点：
+ * - `gap-claimed-known`（学生选"我已掌握"）**不改变材料覆盖状态**（§2.3）；
+ * - 画像事件可跨会话保留，但 AI 补充内容不迁移（用例 E16）。
+ */
+apiRouter.post(
+  '/profile',
+  asyncHandler(async (req, res) => {
+    const body = readBody(req);
+    const sessionId = unwrap(guardSessionId(body.sessionId));
+    const events = unwrap(guardProfileEvents(body.events, sessionId));
+
+    const session = requireSession(sessionId);
+    const profile = commitProfileEvents(session, events);
+
+    const response: ProfileResponse = profile;
+    res.json(response);
+  }),
+);
+
+/* ==================== GET /api/teacher（P1，阶段三） ==================== */
+
+/**
+ * 教师视图。
+ *
+ * **本阶段刻意不实现**：说明书把教师视图列为 P1、计划在阶段三交付，
+ * 且需要班级数据模型（当前不存在）。此处保留一个明确的 501 说明位，
+ * 而不是返回空对象 —— 空对象会被前端与评审误读为"已实现但数据为空"（§9）。
+ */
+apiRouter.get('/teacher', (_req, res) => {
+  respond(
+    res,
+    defaultStatusForApiCode('NOT_IMPLEMENTED'),
+    'NOT_IMPLEMENTED',
+    '教师视图（GET /api/teacher）计划在阶段三交付，当前版本尚未实现。',
+  );
+});
 
 /**
  * 未匹配的 /api 路径。
