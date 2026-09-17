@@ -2,7 +2,7 @@
  * 答疑 —— 对应说明书 2.5、第 04 章
  */
 
-import type { Citation, SourceType } from './knowledge.js';
+import type { Citation, SourceType, VerificationStatus } from './knowledge.js';
 
 /** 三种辅导模式；默认先给提示，完整解答由学生主动选择（说明书 2.5） */
 export type TutorMode = 'explain' | 'hint' | 'full';
@@ -44,6 +44,13 @@ export interface AnswerBlock {
   content: string;
   sourceType: SourceType;
   citations: Citation[];
+  /**
+   * 验证状态（V2.0 §2.5：依据详情须含验证状态）。
+   *
+   * 响应中**必有值**：模型未提供时由服务端归一化为 `unverified`，
+   * 不把「没验证」伪装成「已验证」（§4.2）。
+   */
+  verification: VerificationStatus;
 }
 
 /** 下一步建议 */

@@ -9,6 +9,7 @@ export * from './session.js';
 export * from './knowledge.js';
 export * from './tutor.js';
 export * from './quiz.js';
+export * from './profile.js';
 export * from './api.js';
 // 模型调用接口（C 实现并注入；供服务端适配层与教学模块共用）
 export * from './model.js';
