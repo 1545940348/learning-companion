@@ -54,18 +54,32 @@ export function requireSession(id: string): Session {
   return session;
 }
 
-/** 素材上限校验，超限时由路由返回可读提示（说明书 2.2、用例 E9） */
+/**
+ * 素材上限校验，超限时由路由返回可读提示（说明书 2.2、用例 E9）。
+ *
+ * 提示必须同时给出「已有份数」「本次份数」「合计」，否则学生看到
+ * "最多 3 份材料，当前已有 0 份" 会以为是误报。
+ */
 export function checkMaterialQuota(session: Session, incoming: Material[]): string | null {
   const total = session.materials.length + incoming.length;
   if (total > MATERIAL_LIMITS.maxMaterialsPerSession) {
-    return `每个学习会话最多 ${MATERIAL_LIMITS.maxMaterialsPerSession} 份材料，当前已有 ${session.materials.length} 份。请缩短内容或开始新学习。`;
+    return (
+      `每个学习会话最多 ${MATERIAL_LIMITS.maxMaterialsPerSession} 份材料：` +
+      `当前已有 ${session.materials.length} 份，本次提交 ${incoming.length} 份，合计 ${total} 份。` +
+      '请减少本次份数或开始新学习。'
+    );
   }
   const length = [...session.materials, ...incoming].reduce(
     (sum, material) => sum + material.text.length,
     0,
   );
   if (length > MATERIAL_LIMITS.maxTextLength) {
-    return `材料文本合计不能超过 ${MATERIAL_LIMITS.maxTextLength} 字，当前为 ${length} 字。请缩短内容或开始新学习。`;
+    return (
+      `材料文本合计不能超过 ${MATERIAL_LIMITS.maxTextLength} 字：` +
+      `当前已有 ${session.materials.reduce((sum, material) => sum + material.text.length, 0)} 字，` +
+      `本次提交 ${incoming.reduce((sum, material) => sum + material.text.length, 0)} 字，合计 ${length} 字。` +
+      '请缩短内容或开始新学习。'
+    );
   }
   return null;
 }
@@ -94,4 +108,96 @@ export function applySupplement(sessionId: string, supplement: SupplementBlock):
   };
   sessions.set(sessionId, next);
   return next;
+}
+
+/* ==================== 原子提交（说明书 9.3、C3 验收） ==================== */
+
+/**
+ * 版本冲突：提交时发现会话已被其他请求更新。
+ *
+ * 与 `SessionNotFoundError` 分开，因为语义不同 —— 这是**并发冲突**，不是找不到。
+ * 由 http/middleware.ts 映射为 HTTP 409 + `SESSION_STALE`，
+ * 提示前端丢弃本次结果、基于最新状态重试（说明书 5.3）。
+ */
+export class SessionVersionConflictError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly expectedVersion: number,
+    readonly actualVersion: number,
+  ) {
+    super(
+      `材料版本已更新（本次分析基于版本 ${expectedVersion}，当前已是 ${actualVersion}），` +
+        '本次结果已过期，请基于最新状态重试',
+    );
+    this.name = 'SessionVersionConflictError';
+  }
+}
+
+/**
+ * 构造「写入这些材料后会得到的会话」—— **纯函数，不写入存储**。
+ *
+ * 用途：先把候选材料交给模型分析，成功后再提交（说明书 9.3）。
+ * 这样模型失败时，存储里的材料与版本都不会被改动。
+ *
+ * 数据结构形状：
+ * - `session.materials`：该会话既有材料，`Material` 形如 `{ id, kind, text }`；
+ * - `incoming`：本次新增材料，与既有材料**顺序拼接**（既有在前）；
+ * - 返回值的 `materialVersion` 为 `session.materialVersion + 1`，
+ *   与随后 `commitMaterials` 的结果一致，因此可把候选直接交给教学模块分析；
+ * - `incoming` 为空时原样返回，不递增版本（与既有行为一致）。
+ */
+export function previewMaterials(session: Session, incoming: Material[]): Session {
+  if (incoming.length === 0) return session;
+  return {
+    ...session,
+    materials: [...session.materials, ...incoming],
+    materialVersion: session.materialVersion + 1,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 版本前置条件检查（compare-and-swap 的前半段）。
+ *
+ * ⚠️ 调用方必须保证：**本检查与随后的写入之间不得出现 `await`**。
+ * 本模块是同步的内存实现，因此只要两句连着写，检查即有效。
+ * 若将来改为异步存储或数据库，必须换成事务或真正的 CAS 写。
+ */
+function assertVersionUnchanged(session: Session, expectedVersion: number): void {
+  if (session.materialVersion !== expectedVersion) {
+    throw new SessionVersionConflictError(session.id, expectedVersion, session.materialVersion);
+  }
+}
+
+/**
+ * 提交材料：仅当会话版本仍等于 `expectedVersion` 时才写入。
+ *
+ * 这是「响应提交前复核版本」的落点 —— 防止并发旧响应覆盖新状态（说明书 9.3）。
+ * `materials` 为空时只做版本复核，不递增版本。
+ */
+export function commitMaterials(
+  sessionId: string,
+  materials: Material[],
+  expectedVersion: number,
+): Session {
+  const session = requireSession(sessionId);
+  assertVersionUnchanged(session, expectedVersion);
+  if (materials.length === 0) return session;
+  return applyMaterials(sessionId, materials);
+}
+
+/**
+ * 提交 AI 补充块：与 `commitMaterials` 同样带版本前置条件。
+ *
+ * `/gap` 原先只在请求入口校验过一次版本，模型调用期间（约 1—3 秒）若有并发请求
+ * 提交过，这里会覆盖新状态。现改为提交前复核。
+ */
+export function commitSupplement(
+  sessionId: string,
+  supplement: SupplementBlock,
+  expectedVersion: number,
+): Session {
+  const session = requireSession(sessionId);
+  assertVersionUnchanged(session, expectedVersion);
+  return applySupplement(sessionId, supplement);
 }

@@ -2,11 +2,20 @@
  * 模型适配器 —— C 负责实现与验证（说明书 5.1、C2）
  *
  * 对外只暴露 ModelCaller，教学模块不关心底层是哪家模型。
- * 未配置密钥时自动使用 mock，使 A 能独立开发前端（说明书 8.2）。
+ *
+ * 目录分工：
+ * - ./deepseek.ts  默认通道：DeepSeek API（说明书 V1.4）
+ * - ./workbuddy.ts SDK 调用细节：超时、密钥脱敏、错误分类
+ * - ./budget.ts    单次业务请求的模型调用预算与受控重试（说明书 V1.4）
+ * - ./mock.ts      （仍在下方本文件内）无密钥联调用的假数据
+ * - ./codebuddy.ts （仍在下方本文件内）历史接入：CodeBuddy Agent SDK，须显式设
+ *                  `MODEL_PROVIDER=sdk` 才启用，**不参与自动降级**
+ * - ./smoke.ts     冒烟脚本
  */
 
 import type { ModelCaller, ModelCallOptions, ModelInput } from '@lc/teaching';
 import type { ModelContentBlock } from '@lc/contracts';
+import { createDeepseekAdapter } from './deepseek.js';
 import { createWorkbuddyModelClient } from './workbuddy.js';
 import { env } from '../config/env.js';
 
@@ -234,6 +243,24 @@ function createCodebuddySdkAdapter(): ModelAdapter {
   };
 }
 
+/**
+ * 按 env.channel 选择适配器。
+ *
+ * - `deepseek`（**默认**，说明书 V1.4）：HTTP 适配器，见 ./deepseek.ts
+ * - `sdk`（历史接入，须显式启用）：CodeBuddy Agent SDK，见下方 createCodebuddySdkAdapter
+ * - `mock`（仅供本地开发，须显式启用）
+ *
+ * **三档之间没有任何自动降级，也没有 `auto` 档。**
+ * 缺密钥或模型失败时由 config/env.ts 明确报错、由适配器抛出 ModelError，
+ * 不静默切到其他通道（说明书 V1.4）。
+ */
 export function createModelAdapter(): ModelAdapter {
-  return env.useMock ? createMockAdapter() : createCodebuddySdkAdapter();
+  switch (env.channel) {
+    case 'sdk':
+      return createCodebuddySdkAdapter();
+    case 'mock':
+      return createMockAdapter();
+    default:
+      return createDeepseekAdapter();
+  }
 }
