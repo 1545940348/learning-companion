@@ -51,6 +51,7 @@ import {
   MAX_VOICE_SECONDS,
 } from '@lc/contracts';
 import { env } from '../config/env.js';
+import { describeBuild } from '../config/build-info.js';
 import { logger } from '../logger.js';
 import { createBudget, withBudget } from '../model/budget.js';
 import { ModelError, redact } from '../model/errors.js';
@@ -225,6 +226,8 @@ apiRouter.get('/health', (_req, res) => {
     modelProvider: adapter.name,
     mock: adapter.isMock,
     verification: VERIFICATION_ENGINE,
+    // 运行形态自证（P-C12）：让"线上跑的是哪个产物"可核对，不靠人猜
+    build: describeBuild(),
   };
   res.json(body);
 });

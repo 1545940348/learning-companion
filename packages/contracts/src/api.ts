@@ -59,6 +59,24 @@ export interface VerificationEngineStatus {
   available: boolean;
 }
 
+/**
+ * 运行形态自证（待办 `P-C12`）。
+ *
+ * 用途只有一个：**确认线上跑的是哪个产物**。部署之后，
+ * 「本次响应来自构建产物还是源码直跑」不该靠人去猜。
+ *
+ * ⚠️ 该接口是公开的，因此**只报入口文件名，不回报本机绝对路径**
+ * —— 回报绝对路径等于把开发机的目录结构公开出去。
+ */
+export interface BuildInfo {
+  /** `dist` = 构建产物（部署形态）；`dev` = tsx 直跑源码 */
+  mode: 'dist' | 'dev';
+  /** 入口文件**文件名**（不含目录） */
+  entry: string;
+  /** 入口文件的修改时间（ISO 8601）；取不到时为 null，**不假装知道** */
+  builtAt: string | null;
+}
+
 export interface HealthResponse {
   ok: boolean;
   version: string;
@@ -66,6 +84,11 @@ export interface HealthResponse {
   /** 为 true 表示当前使用 mock 适配器，未接真实模型 */
   mock: boolean;
   verification: VerificationEngineStatus;
+  /**
+   * 运行形态。**可选字段**（加性变更，消费方无需改动）：
+   * 旧版服务端不返回它，读它的代码不得假定其存在。
+   */
+  build?: BuildInfo;
 }
 
 /* ============ POST /api/parse ============ */

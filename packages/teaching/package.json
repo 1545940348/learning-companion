@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "教学智能模块：提示词、依赖分析、缺口补充、输出校验",
+  "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

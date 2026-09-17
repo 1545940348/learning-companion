@@ -328,6 +328,77 @@ console.log('\n--- 4b. 卡片与图谱联动：高亮与定位 ---');
   check('★ 选中项不在图谱中时如实说明', missing.includes('不在当前图谱的节点里'), null);
 }
 
+/* ==================== 4c. 图谱（有关系边时，P-A4） ==================== */
+
+console.log('\n--- 4c. 图谱有边时的渲染：等 I1 交付后即可用这批断言验收 ---');
+{
+  // 边的产出属 B（I1）。这里用**合成的边**把渲染路径先锁住：
+  // 这样 B 一旦把 edges 接上，前端是不是对的可以立刻判定，不必等浏览器人工看。
+  const nodes = [
+    { id: 'kp-mono', name: '单调性', explanation: '', citations: [], verification: 'unverified' as const },
+    { id: 'kp-derivative', name: '导数', explanation: '', citations: [], verification: 'unverified' as const },
+    { id: 'kp-slope', name: '斜率', explanation: '', citations: [], verification: 'unverified' as const },
+  ];
+
+  const withEdges: GraphNeighborhood = {
+    sessionId: 's-1',
+    materialVersion: 1,
+    rootConceptId: null,
+    nodes,
+    edges: [
+      {
+        from: 'kp-mono',
+        to: 'kp-derivative',
+        kind: 'prerequisite',
+        status: 'LOCAL',
+        reason: '判断单调性需要导数的符号含义',
+        evidence: [],
+        verification: 'unverified',
+      },
+      {
+        from: 'kp-derivative',
+        to: 'kp-slope',
+        kind: 'prerequisite',
+        status: 'MISSING',
+        reason: '导数概念依赖斜率',
+        evidence: [],
+        inferred: true,
+        verification: 'unverified',
+      },
+    ],
+  };
+
+  const html = render('图谱面板（有关系边）', <GraphPanel wb={makeWb({ graph: withEdges })} />);
+
+  check('★ 关系边被渲染出来', html.includes('graph-edge'), null);
+  check('★ 关系类型显示为中文（前置）', html.includes('前置'), null);
+  check('★ 推断出的边标注「（推断）」', html.includes('（推断）'), null);
+  check(
+    '★ 有边时不再显示"没有关系边"的警告（两种状态不能同时出现）',
+    !html.includes('没有关系边'),
+  );
+  check('边数出现在面板头部', /2 关系/.test(html));
+
+  // 分层：有边时节点应分布在不同列（x 不同）；无边时应全在同一列。
+  const columnsOf = (markup: string) =>
+    new Set([...markup.matchAll(/<rect x="(\d+)"/g)].map((m) => m[1]));
+
+  const edgeColumns = columnsOf(html);
+  check('★ 有边时节点按依赖深度分层（多列）', edgeColumns.size > 1, [...edgeColumns]);
+
+  const noEdgeHtml = render(
+    '图谱面板（同样三个节点但无边）',
+    <GraphPanel wb={makeWb({ graph: { ...withEdges, edges: [] } })} />,
+  );
+  const flatColumns = columnsOf(noEdgeHtml);
+  check(
+    '★ 无边时节点不假装分层（单列）',
+    flatColumns.size === 1,
+    [...flatColumns],
+  );
+  check('无边时如实说明只有节点', noEdgeHtml.includes('没有关系边'));
+}
+
 /* ==================== 5. 练习 ==================== */
 
 console.log('\n--- 5. 练习面板 ---');

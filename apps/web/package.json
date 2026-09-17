@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "前端工作台：零门槛提问、材料路径、答疑与练习",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -44,7 +44,7 @@ apps/server       Node.js + TypeScript    模型适配 / 会话 / 部署
 | 接口 | 用途 | 状态 |
 |---|---|---|
 | `POST /api/session` | 创建会话，返回初始材料版本 0 与空图谱 | ✅ |
-| `GET /api/health` | 版本、当前模型通道、是否 mock、验证引擎状态 | ✅ |
+| `GET /api/health` | 版本、当前模型通道、是否 mock、验证引擎状态、**运行形态自证**（`mode`/`entry`/`builtAt`） | ✅ |
 | `POST /api/parse` | 文字 / 图片 / 语音 → 识别文本、公式 LaTeX、低置信度标记、`unavailable[]` | ✅（**目前仅纯文字**，其余通道如实列入 `unavailable`） |
 | `POST /api/knowledge` | 材料 → 知识点、前置关系与来源；**材料与图谱同一次原子提交并落盘** | ✅ |
 | `POST /api/tutor` | 提问 → 分块回答、来源、验证状态、下一步（`sessionId: null` 即零材料轻路径） | ✅ |
@@ -73,6 +73,26 @@ npm run dev
 
 ```bash
 MODEL_PROVIDER=mock npm run dev -w @lc/server
+```
+
+### 提交 / 部署前必跑
+
+```bash
+npm run verify:predeploy
+```
+
+一条命令覆盖三类"最容易被漏掉"的检查 —— `build:clean`（把旧产物**挪走**而非删除）→
+`build` → `verify:dist`（**「构建成功」≠「可运行」**，这条踩过坑）→
+`verify:repo`（敏感信息、依赖与许可证声明、提示词快照一致性）。
+**不要靠人记得**：部署前与提交前都跑它。
+
+也可单独跑其中一段：
+
+```bash
+npm run build:clean        # 构建前置清理（在某些沙箱环境里，删除 dist 会被安全策略拦住）
+npm run verify:sensitive   # 工作区 + 待提交文件 + 全部历史 blob 的密钥/PII 扫描
+npm run verify:licenses    # 依赖声明 ↔ 安装 ↔ README 表 双向核对 + 许可证 + 脚本命令提供方
+npm run verify:prompts     # 提示词快照与 packages/teaching/src/prompt.ts 逐字比对
 ```
 
 ### 模型通道
@@ -156,8 +176,9 @@ docs/
 > 更新时间 2026-09-17（第 7 轮）。
 
 **核心材料路径可交互运行。** 说明书已更新至 **V2.0**；契约迁移 V2.0 已落地。
-回归脚本 **288 项全部通过**：`verify:all` **190**（`store` 22 / `errors` 34 / `guards` 81 / `graph` 53）、
-`verify:flow` **32**（真实 HTTP）、`verify:dist` **8**（构建产物形态）、`verify:render` **58**（前端渲染冒烟）。
+回归脚本 **334 项全部通过**：`verify:all` **190**（`store` 22 / `errors` 34 / `guards` 81 / `graph` 53）、
+`verify:flow` **32**（真实 HTTP）、`verify:dist` **11**（构建产物形态，含**运行形态自证**）、
+`verify:render` **68**（前端渲染冒烟）、`verify:repo` **33**（敏感信息 / 依赖与许可证 / 提示词快照）。
 全部为离线或 mock 通道，**不消耗模型额度**。
 
 ### 已实现（可演示）
@@ -205,22 +226,34 @@ docs/
 
 ## 第三方依赖声明
 
-按赛事手册 8.2 要求注明所使用的开源框架与第三方库（实际锁定版本见各 workspace 的 `package.json`）。
+按赛事手册 8.2 要求注明所使用的开源框架与第三方库。下表与各 workspace 的 `package.json`
+**逐条双向核对**，核对脚本为 `npm run verify:licenses`（同时校验许可证声明与安装版本一致、
+以及 npm 脚本用到的命令都有已声明的依赖提供）。
 
 | 依赖 | 版本 | 用途 | 许可 |
 |---|---|---|---|
-| `@tencent-ai/agent-sdk` | ^0.3.259 | 模型推理调用（CodeBuddy Agent SDK） | MIT |
+| `@tencent-ai/agent-sdk` | ^0.3.259 | 模型推理调用（CodeBuddy Agent SDK，历史接入通道） | MIT |
 | `express` | ^4.21.0 | HTTP 服务（`apps/server`） | MIT |
 | `dotenv` | ^16.4.0 | 服务端环境变量加载 | BSD-2-Clause |
 | `react` / `react-dom` | ^19.0.0 | 前端框架（`apps/web`） | MIT |
 | `vite` | ^6.0.0 | 前端构建与开发服务器 | MIT |
+| `@vitejs/plugin-react` | ^4.3.4 | Vite 的 React 插件 | MIT |
+| `concurrently` | ^10.0.5 | 根 `npm run dev` 同时启动前后端 | MIT |
 | `tsx` | ^4.19.0 | 开发期 TypeScript 运行器 | MIT |
 | `tsup` | ^8.3.0 | 服务端构建 | MIT |
 | `typescript` | ^5.7.0 | 构建与类型检查 | Apache-2.0 |
+| `@types/express` | ^5.0.0 | Express 类型定义 | MIT |
+| `@types/node` | ^22.10.0 | Node 类型定义 | MIT |
+| `@types/react` / `@types/react-dom` | ^19.0.0 | React 类型定义 | MIT |
 | `mathjs` | ^15.2.0（**计划引入**） | 符号验证引擎（求导、化简、求值） | Apache-2.0 |
 
 > `mathjs` 尚未安装：选型已定（见 `docs/tech/2026-09-17-符号验证引擎选型-纯TS.md`），
 > 由 B 在实现 `packages/teaching/src/symbolic.ts` 时一并声明。
+
+> ⚠️ **本轮修正**：`concurrently` 此前被根 `npm run dev` 使用却**从未声明** ——
+> 本机装了能跑，**别人 clone 下来 `npm run dev` 会直接失败**（违反补充说明 §5.2「他人可照着跑起来」）。
+> 已补进根 `devDependencies`。`@types/*` 与 `@vitejs/plugin-react` 此前也未在表中声明，一并补齐。
+> 这两类问题现在由 `verify:licenses` 自动拦截。
 
 第三方推理接口的使用方式以赛事方最终答复为准（见 `docs/tech` 模型接入记录的待办项）。
 

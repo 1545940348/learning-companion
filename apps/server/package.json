@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "服务端：模型适配、会话管理、图谱落盘与十个接口",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

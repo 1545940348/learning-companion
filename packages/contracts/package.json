@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "共享类型与接口契约（前后端唯一事实来源）",
+  "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

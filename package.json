@@ -17,7 +17,16 @@
     "dev:server": "npm run dev -w @lc/server",
     "dev:web": "npm run dev -w @lc/web",
     "build": "npm run build -w @lc/server && npm run build -w @lc/web",
+    "build:clean": "node scripts/prebuild-clean.mjs",
     "start": "npm run start -w @lc/server",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "verify:sensitive": "node scripts/check-sensitive.mjs",
+    "verify:licenses": "node scripts/check-licenses.mjs",
+    "verify:prompts": "node scripts/check-prompts.mjs",
+    "verify:repo": "npm run verify:sensitive && npm run verify:licenses && npm run verify:prompts",
+    "verify:predeploy": "npm run build:clean && npm run build && npm run verify:dist -w @lc/server && npm run verify:repo"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
   }
 }

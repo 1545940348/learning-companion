@@ -131,6 +131,19 @@ if (!ready) {
   check('health 如实报 mock 通道', health.json?.mock === true, health.json?.mock);
   check('health 含验证引擎状态', typeof health.json?.verification?.engine === 'string', health.json?.verification);
 
+  // 运行形态自证（P-C12）：产物形态下必须自报 dist，否则"线上跑的是哪个产物"无从核对
+  check('★ health 自报运行形态为产物态（P-C12）', health.json?.build?.mode === 'dist', health.json?.build);
+  check(
+    '★ health 的构建信息不含本机绝对路径（公开接口不得泄漏目录结构）',
+    typeof health.json?.build?.entry === 'string' && !/[\\/]/.test(health.json.build.entry),
+    health.json?.build?.entry,
+  );
+  check(
+    '构建时间要么是合法 ISO 时间、要么如实为 null',
+    health.json?.build?.builtAt === null || !Number.isNaN(Date.parse(health.json?.build?.builtAt ?? '')),
+    health.json?.build?.builtAt,
+  );
+
   // 再多打两个路由，确保内联后的依赖真的可用（不只是"进程活着"）
   const session = await call('POST', '/api/session');
   check('POST /api/session 201 且含空图谱', session.status === 201 && Array.isArray(session.json?.graph?.nodes), session.status);
