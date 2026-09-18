@@ -107,6 +107,20 @@ function Turn({ turn, mock }: { turn: TutorTurn; mock: boolean }) {
         <Block key={index} block={block} openIndex={detail} onToggle={setDetail} />
       ))}
 
+      {/*
+        `I14`：被来源校验拦下的块**不得无声消失**。
+        原先只要还有块通过，被拒的块就从响应里没了 —— 学生看到的是残缺答案，
+        且无从知道少了一段。服务端把丢弃事实放进 `droppedBlocks`，这里必须显示出来。
+      */}
+      {turn.answer.droppedBlocks && (
+        <p className="warn-inline">
+          本次回答不完整：另有 {turn.answer.droppedBlocks.count} 段内容没有展示 ——
+          未通过来源校验（{turn.answer.droppedBlocks.reasons.join('；')}）。
+          这通常意味着那段内容既无法定位到你的材料、又不属于你已授权补充的段落；
+          系统按规则把它拦下了，而不是当作正常答案交给你。
+        </p>
+      )}
+
       {turn.answer.nextStep && (
         <p className="hint-inline">下一步：{turn.answer.nextStep.message}</p>
       )}

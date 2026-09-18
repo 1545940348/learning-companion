@@ -17,13 +17,6 @@ export class ModelError extends Error implements ModelFailure {
     this.code = code;
     this.detail = detail;
   }
-
-  /** 转为可直接返回给调用方的载荷 */
-  toFailure(): ModelFailure {
-    return this.detail === undefined
-      ? { code: this.code, message: this.message }
-      : { code: this.code, message: this.message, detail: this.detail };
-  }
 }
 
 /**

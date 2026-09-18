@@ -633,6 +633,22 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
 
   const loadQuiz = useCallback(
     async (topic: Topic, source: QuizSource): Promise<QuizItem[] | null> => {
+      /*
+       * 「按我的材料出题」在零材料时必须**拒绝**，不能静默建会话（`I20⑥`）。
+       *
+       * 原实现无条件走 `ensureMaterialSession()`：会话被悄悄建出来，
+       * 服务端拿空材料去出题，返回的题却被标成 `source: 'material'`，
+       * 前端据此显示「基于你的材料生成」—— 而题目与学生的材料毫无关系。
+       * 这里在发出请求之前就拦住，并说清该怎么继续。
+       */
+      if (source === 'material' && materials.length === 0) {
+        setNotice({
+          kind: 'warn',
+          text: '还没有可用的材料，无法按材料出题。请先在「材料」面板提交讲义，或改用「项目自编题」（不依赖材料）。',
+        });
+        return null;
+      }
+
       if (!begin('quiz')) return null;
       try {
         const id = source === 'material' ? await ensureMaterialSession() : undefined;
@@ -652,7 +668,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
         end('quiz');
       }
     },
-    [begin, clearFailure, end, ensureMaterialSession],
+    [begin, clearFailure, end, ensureMaterialSession, materials],
   );
 
   /* ---------- 图谱与画像 ---------- */

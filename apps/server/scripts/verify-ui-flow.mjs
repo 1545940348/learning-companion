@@ -193,5 +193,52 @@ const other = (await call('POST', '/api/session')).json;
 const otherGraph = (await call('GET', `/api/graph?sessionId=${other.id}`)).json;
 check('⑫ 新会话读不到上一会话的图谱（E10）', otherGraph.nodes.length === 0 && otherGraph.edges.length === 0);
 
+/*
+ * 13. I13：**有会话但零材料**时提问，不得被误判为 `UNAUTHORIZED_CONTENT`。
+ *
+ * 这是本轮补上的断言，也是"334 项全绿 ≠ 没有缺陷"的样例：
+ * 修复前这一路径稳定返回 403 且 `retryable=false`（学生卡死），
+ * 而上面 12 组断言**没有任何一条**经过它 —— 因为每一组要么带材料、要么不带会话。
+ * 可达路径：点「开始新学习」或「按我的材料出题」之后再直接提问。
+ */
+const emptySession = (await call('POST', '/api/session')).json;
+const zeroMaterialAsk = await call('POST', '/api/tutor', {
+  sessionId: emptySession.id,
+  materialVersion: emptySession.materialVersion,
+  question: '单调性怎么判断',
+  mode: 'explain',
+});
+check(
+  '⑬ 有会话但零材料：提问不被拒（修 I13 前是 403 UNAUTHORIZED_CONTENT）',
+  zeroMaterialAsk.status === 200,
+  { status: zeroMaterialAsk.status, error: zeroMaterialAsk.json?.error ?? null },
+);
+check(
+  '⑬ 零材料仍如实标注「未基于材料」（有会话不等于有材料）',
+  zeroMaterialAsk.json?.basedOnMaterial === false,
+  zeroMaterialAsk.json?.basedOnMaterial,
+);
+check(
+  '⑬ 正常回答不带 droppedBlocks（该字段只在确有块被校验丢弃时出现，I14）',
+  zeroMaterialAsk.json?.droppedBlocks === undefined,
+  zeroMaterialAsk.json?.droppedBlocks ?? null,
+);
+
+/*
+ * 14. I20⑥：零材料会话「按我的材料出题」必须被拒。
+ * 修复前它返回一组写死的题并统一标成 `source: 'material'`，前端据此显示
+ * 「基于你的材料生成」—— 来源声明不成立，属真实性红线。
+ */
+const emptyQuiz = await call('POST', '/api/quiz', {
+  topic: 'monotonicity',
+  source: 'material',
+  sessionId: emptySession.id,
+});
+check(
+  '⑭ 零材料会话按材料出题被拒（400 BAD_REQUEST，不返回 source=material 的题）',
+  emptyQuiz.status === 400 && emptyQuiz.json?.error?.code === 'BAD_REQUEST',
+  { status: emptyQuiz.status, error: emptyQuiz.json?.error ?? null },
+);
+
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);
 process.exitCode = failed > 0 ? 1 : 0;

@@ -53,11 +53,6 @@ export function getSession(id: string): Session | undefined {
   return sessions.get(id);
 }
 
-/** 供测试与手动排查使用 */
-export function listSessions(): Session[] {
-  return [...sessions.values()];
-}
-
 export function clearSessions(): void {
   sessions.clear();
   profiles.clear();
@@ -106,19 +101,6 @@ export function checkMaterialQuota(session: Session, incoming: Material[]): stri
     );
   }
   return null;
-}
-
-/** 写入材料并递增版本。失败时不改动已有状态 */
-export function applyMaterials(sessionId: string, materials: Material[]): Session {
-  const session = requireSession(sessionId);
-  const next: Session = {
-    ...session,
-    materials: [...session.materials, ...materials],
-    materialVersion: session.materialVersion + 1,
-    updatedAt: new Date().toISOString(),
-  };
-  sessions.set(sessionId, next);
-  return next;
 }
 
 /* ==================== 原子提交（说明书 §3.3、C3 验收） ==================== */
