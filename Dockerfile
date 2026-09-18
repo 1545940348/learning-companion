@@ -19,12 +19,23 @@ RUN apk add --no-cache tzdata && \
 WORKDIR /app
 
 # 先只拷贝源码（.dockerignore 已排除 node_modules 与 dist），再装依赖、再构建。
-# 用 npm install 而非 npm ci：容错优先 —— ci 要求 lockfile 与 package.json 严格同步，
-# 不同步会直接中断构建。部署当天卡在这里不划算。
 COPY . .
 
-# 国内构建改用云厂商 npm 镜像源，速度明显更快（官方建议）
-RUN npm config set registry https://mirrors.cloud.tencent.com/npm/ && \
+# 国内构建改用云厂商 npm 镜像源，速度明显更快（官方建议）。
+#
+# ⚠️ 这里**必须先丢弃 package-lock.json 再安装**，否则构建一定失败。
+# 原因：本仓库的锁文件是在 Windows 上生成的，里面**缺少平台相关的可选依赖**——
+#   · rollup 声明了 27 个平台二进制，锁文件里一个都没记；
+#   · esbuild 只记了 win32-x64。
+# 于是在 Linux 上 `npm install` 认为"已满足"，**永远不会去拉 linux-x64-musl**，
+# 随后 tsup / vite 加载 rollup 原生模块时报
+# `Cannot find module @rollup/rollup-linux-x64-musl`（npm 已知缺陷 npm/cli#4828）。
+#
+# 丢掉锁文件后，npm 会**按容器自身的平台（Linux/musl）重新解析**，正确拉取。
+# 代价：容器内不再锁定依赖版本，可复现性下降；对演示镜像这个取舍可接受。
+# 彻底修法是重新生成一份含全平台可选依赖的锁文件（待办，影响全队在 Linux 上的构建）。
+RUN rm -f package-lock.json && \
+    npm config set registry https://mirrors.cloud.tencent.com/npm/ && \
     npm install
 
 # 一次构建出两份产物：apps/server/dist（服务端）+ apps/web/dist（前端）
