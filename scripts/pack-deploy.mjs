@@ -28,16 +28,22 @@
  *    名字里那个点写漏了，判定就整个失效（2026-09-18 修正，见 `EXCLUDE_DIRS` 注释）；
  * 4. **本脚本按文件系统遍历，不读 `.gitignore`** —— 所以 `.gitignore` 里的
  *    `*.log`、`.npm-cache/` 这些规则，这里必须**自己再写一遍**；
- * 5. **自检要与排除名单同源**：只查 `node_modules`/`.git`/`.env` 三个名字，
- *    只能证明"没踩到上一轮踩过的坑"，不能证明产物干净 —— 现已改为
- *    "名单里的任何目录 + 禁止后缀 + 体积上限"三道判定。
+ * 5. **自检与拷贝必须同源**：自检原先只查 `node_modules`/`.git`/`.env` 三个名字，
+ *    只能证明"没踩到上一轮踩过的坑"。现在拷贝判定（`shouldCopy`）与自检（`scan`）
+ *    **共用同一个 `isForbiddenFile()`**，并且它覆盖 `.gitignore` 的密钥规则全集
+ *    （`.env` / `.env.*` / `*.pem` / `*.key` / `*.p12` / `secrets.json`，
+ *    例外 `.env.example`）—— 手抄的子集会让 `.env.bak`、`secrets.json`
+ *    这类文件被拷进包而自检仍打印 ✅。
+ * 6. **输出目录要先验身份**（2026-09-18 补，见 `assertUsableOutDir`）：
+ *    `PACK_DEPLOY_OUT` 是唯一由用户提供的路径，而它既可能等于仓库本身
+ *    （会先 `rm -rf` 整个仓库），也可能在仓库内部导致 `copyTree` 无限自嵌套。
  *
  * 本脚本只读仓库、只写输出目录，**不修改任何源码**。
  */
 
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -51,6 +57,50 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = process.env.PACK_DEPLOY_OUT
   ? resolve(process.env.PACK_DEPLOY_OUT)
   : resolve(repoRoot, 'deploy-dist');
+
+/**
+ * ⚠️ 输出目录的**身份校验**（2026-09-18 补）。
+ *
+ * 本脚本有体积闸门、有自检，却对**唯一由用户提供的那个路径**（`PACK_DEPLOY_OUT`）
+ * 没有任何校验。两种后果都是灾难性的：
+ *
+ * 1. **输出目录 = 仓库本身（或它的上级）**：`prepareOutDir()` 会先对仓库执行
+ *    `rm(dir, { recursive: true, force: true })` —— `PACK_DEPLOY_OUT=D:\...\LearnBuddy`
+ *    等于一条删库命令，而它看起来只是"把产物放到别处"。
+ * 2. **输出目录在仓库内部、名字又不在 `EXCLUDE_DIRS` 里**：`copyTree()` 先建目标目录
+ *    再 `readdir` 源目录，于是每一层都能看见自己并继续下钻 —— 会一直拷到路径长度
+ *    上限才报错（上一轮两次复现：819 层嵌套 / 473 MB），清理那棵树本身也很痛苦。
+ *    （默认的 `deploy-dist/` 在排除名单里，所以默认用法是安全的。）
+ *
+ * 判定必须发生在**任何删除动作之前**，并且宁可拒跑也不"尽力而为"。
+ */
+function isInside(parent, child) {
+  const rel = relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function assertUsableOutDir(dir) {
+  const repoInsideOut = isInside(dir, repoRoot);
+  const insideRepo = isInside(repoRoot, dir);
+  const topSegment = relative(repoRoot, dir).split(sep)[0] ?? '';
+
+  if (dir === repoRoot || repoInsideOut) {
+    console.error('✗ 输出目录不合法：它等于仓库根目录，或是仓库的上级目录。');
+    console.error(`  仓库根　：${repoRoot}`);
+    console.error(`  输出目录：${dir}`);
+    console.error('  继续执行会先对整个仓库递归删除，再把它拷进它自己。已中止，未删除任何东西。');
+    console.error('  请把 PACK_DEPLOY_OUT 指到仓库之外的目录，或去掉它使用默认的 deploy-dist/。');
+    process.exit(1);
+  }
+
+  if (insideRepo && !EXCLUDE_DIRS.has(topSegment)) {
+    console.error(`✗ 输出目录不合法：它在仓库内部，且首层名字「${topSegment}」不在排除名单里。`);
+    console.error(`  输出目录：${dir}`);
+    console.error('  继续执行会把输出目录拷进它自己（无限嵌套，直到路径超长才报错）。已中止。');
+    console.error('  请改用仓库之外的目录，或去掉 PACK_DEPLOY_OUT 使用默认的 deploy-dist/。');
+    process.exit(1);
+  }
+}
 
 /**
  * 整棵子树都不打包的目录名。
@@ -81,19 +131,48 @@ const EXCLUDE_DIRS = new Set([
   '.idea',
 ]);
 
-/** 绝不打包的文件名（本地密钥与本地配置） */
-const EXCLUDE_FILES = new Set(['.env', '.env.local', '.env.development', '.env.production']);
-
-/**
- * 绝不打包的后缀。
- *
- * `.gitignore` 里有 `*.log`，但本脚本是**按文件系统**遍历的，不读 `.gitignore` ——
- * 所以必须自己列一遍，否则本地那些 `_xxx.log` 会整包带走。
- */
+/** 本地日志等按后缀排除（`.gitignore` 里对应 `*.log`） */
 const EXCLUDE_SUFFIXES = ['.log'];
 
-/** 只按文件名判断，**不读内容** —— 密钥内容不应进入任何输出 */
-const FORBIDDEN_NAMES = new Set(['.env', '.env.local']);
+/**
+ * 绝不打包的文件名规则 —— **与 `.gitignore` 的密钥规则同源**（2026-09-18 修正）。
+ *
+ * 原实现是两份**手抄的子集**：`EXCLUDE_FILES` 只列了四个精确名字，
+ * 自检用的 `FORBIDDEN_NAMES` 更只认 `.env` / `.env.local`。于是
+ * `apps/server/.env.bak`（被 `.gitignore` 的 `.env.*` 覆盖，所以 `git status` 是干净的）、
+ * 仓库根的 `secrets.json`、`service-key.pem` 会被照拷进上传包，
+ * 而末尾自检**仍然打印 ✅** —— 操作者接着就把它传上云托管。
+ *
+ * 现在全脚本只有**一处**规则：`shouldCopy()`（决定拷不拷）与 `scan()`（自检报不报）
+ * 都调用 `isForbiddenFile()`。自检与排除名单同源，才谈得上"自检通过"。
+ *
+ * ⚠️ 本脚本按文件系统遍历、**不读 `.gitignore`**，所以这些规则必须自己再写一遍；
+ * 以后 `.gitignore` 新增密钥规则，这里要同步新增。
+ */
+const SECRET_NAME_PATTERNS = [
+  /^\.env$/i, // .env
+  /^\.env\..+$/i, // .env.local / .env.bak / .env.production …（.env.example 见下方例外）
+  /\.pem$/i,
+  /\.key$/i,
+  /\.p12$/i,
+  /^secrets\.json$/i,
+];
+
+/** `.gitignore` 里明确放行的例外（`!.env.example`）—— 它本来就该随包交付 */
+const ALLOWED_NAMES = new Set(['.env.example']);
+
+/**
+ * 该文件名是否"绝不打包"（密钥或本地日志）。
+ *
+ * **唯一判据来源**，`shouldCopy()` 与 `scan()` 共用 —— 两边分叉正是上一轮
+ * "拷进去了却自检 ✅"的根因。
+ */
+function isForbiddenFile(name) {
+  const lower = name.toLowerCase();
+  if (ALLOWED_NAMES.has(lower)) return false;
+  if (SECRET_NAME_PATTERNS.some((pattern) => pattern.test(name))) return true;
+  return EXCLUDE_SUFFIXES.some((suffix) => lower.endsWith(suffix));
+}
 
 function relativeParts(from) {
   const rel = relative(repoRoot, from);
@@ -106,9 +185,7 @@ function shouldCopy(src) {
   const parts = relativeParts(src);
   if (parts.length === 0) return true;
   if (parts.some((part) => EXCLUDE_DIRS.has(part))) return false;
-  const name = parts[parts.length - 1];
-  if (EXCLUDE_FILES.has(name)) return false;
-  return !EXCLUDE_SUFFIXES.some((suffix) => name.toLowerCase().endsWith(suffix));
+  return !isForbiddenFile(parts[parts.length - 1]);
 }
 
 /**
@@ -199,11 +276,8 @@ async function scan(dir) {
         continue;
       }
 
-      if (FORBIDDEN_NAMES.has(entry.name)) {
-        problems.push(`不该出现文件：${rel}`);
-      }
-      if (EXCLUDE_SUFFIXES.some((suffix) => entry.name.toLowerCase().endsWith(suffix))) {
-        problems.push(`不该出现文件（本地日志）：${rel}`);
+      if (isForbiddenFile(entry.name)) {
+        problems.push(`不该出现文件（密钥或本地日志）：${rel}`);
       }
 
       const dot = entry.name.lastIndexOf('.');
@@ -232,6 +306,9 @@ if (!existsSync(join(repoRoot, 'package.json'))) {
   console.error(`✗ 找不到 package.json，请在仓库根目录运行。当前解析到：${repoRoot}`);
   process.exit(1);
 }
+
+// 必须在 prepareOutDir（含递归删除）之前拒掉危险路径
+assertUsableOutDir(outDir);
 
 console.log(`仓库根目录：${repoRoot}`);
 console.log(`输出目录　：${outDir}\n`);
@@ -273,7 +350,10 @@ for (const [ext, count] of [...byExtension.entries()].sort((a, b) => b[1] - a[1]
 
 console.log('\n--- 安全检查 ---');
 if (problems.length === 0) {
-  console.log(`  ✅ 未发现 node_modules / .git / .env / 缓存目录 / *.log，体积也在 ${formatSize(MAX_PACK_BYTES)} 以内 —— 可以上传`);
+  console.log(
+    `  ✅ 未发现排除名单里的任何目录、密钥/日志文件（与拷贝时的判定同源），` +
+      `体积也在 ${formatSize(MAX_PACK_BYTES)} 以内 —— 可以上传`,
+  );
 } else {
   console.log(`  ❌ 发现 ${problems.length} 处不该打包的内容：`);
   for (const problem of problems.slice(0, 20)) {
