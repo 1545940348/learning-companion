@@ -1,0 +1,44 @@
+# 构建镜像时不需要带进容器的内容
+#
+# 两个目的：
+# 1. **体积**：不带 node_modules（7000+ 文件）与本地构建产物，容器里会重新装、重新构建；
+# 2. **安全**：本地密钥文件绝不进入镜像 —— 这是第二道保险（.gitignore 是第一道）。
+
+# 依赖与构建产物（容器内会重新装/重新构建）
+node_modules
+**/node_modules
+dist
+**/dist
+
+# 版本控制与本地临时目录
+.git
+.gitignore
+.learnbuddy
+.tmp
+.tmp_extract
+deploy-dist
+# ⚠️ 本机 npm 缓存目录名是**带点**的 `.npm-cache`（见 .gitignore）。
+# 原先只写了 `npm-cache`，判定失效 → 366 MB 缓存会进入构建上下文。
+# 两个名字都留着，避免再被本地/平台的命名差异绊一次。
+.npm-cache
+npm-cache
+.pnpm-store
+.yarn
+coverage
+
+# 本地密钥（双重保险：不进仓库，也不进镜像）
+.env
+**/.env
+.env.local
+**/.env.local
+
+# 文档与设计稿：不影响运行，纯减小体积
+docs
+*.md
+
+# 编辑器与系统文件
+.vscode
+.idea
+*.log
+Thumbs.db
+.DS_Store

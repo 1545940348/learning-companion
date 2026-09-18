@@ -53,6 +53,12 @@ export interface Env {
   /** 历史接入：CodeBuddy Agent SDK */
   codebuddyApiKey: string;
   codebuddyEnvironment: CodebuddyEnvironment;
+
+  /**
+   * 前端构建产物目录（说明书 V2.0 · `P-C13` 同源部署）。
+   * 留空表示自动探测（见 `http/serve-web.ts`）；平台目录结构与本地不同时用 `WEB_DIST_DIR` 覆盖。
+   */
+  webDistDir: string;
 }
 
 function readNumber(value: string | undefined, fallback: number): number {
@@ -113,6 +119,10 @@ export function readEnv(): Env {
 
     codebuddyApiKey: readText(process.env.CODEBUDDY_API_KEY),
     codebuddyEnvironment: readEnvironment(process.env.CODEBUDDY_INTERNET_ENVIRONMENT),
+
+    // 留空 = 自动探测前端产物目录（见 http/serve-web.ts）。
+    // 用于平台目录结构与本地不同时的兜底，改了不用动代码。
+    webDistDir: readText(process.env.WEB_DIST_DIR),
   };
 }
 
