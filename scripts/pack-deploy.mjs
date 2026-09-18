@@ -103,8 +103,19 @@ function relativeParts(from) {
 
 /** 是否拷贝该路径（目录返回 false 则整棵子树跳过） */
 function shouldCopy(src) {
+  // ① 输出目录自身及其内部一律不拷。
+  //    必须按**真实路径**判断，不能只按目录名 —— 否则一旦用 PACK_DEPLOY_OUT
+  //    指到自定义目录（如 deploy-dist-v2），固定名字 `deploy-dist` 就匹配不上，
+  //    脚本会把产物**拷进产物里**并递归下去（2026-09-18 实测踩到，产生 10 万个文件）。
+  const abs = resolve(src);
+  if (abs === outDir || abs.startsWith(outDir + sep)) return false;
+
   const parts = relativeParts(src);
   if (parts.length === 0) return true;
+
+  // ② 本脚本历次生成的产物目录（deploy-dist、deploy-dist-v2 …）同样不该被打进新产物
+  if (parts.some((part) => part.startsWith('deploy-dist'))) return false;
+
   if (parts.some((part) => EXCLUDE_DIRS.has(part))) return false;
   const name = parts[parts.length - 1];
   if (EXCLUDE_FILES.has(name)) return false;
