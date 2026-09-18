@@ -44,7 +44,20 @@ const bad = (label, detail) => {
   failed += 1;
   console.log(`  [失败] ${label}${detail ? ` —— ${detail}` : ''}`);
 };
+/**
+ * 注意项也算**一条做完了的检查**（2026-09-18 修正）。
+ *
+ * 原先 `warn()` 只累加 `warned`、不累加 `passed`，于是同一条检查在"有情况"时计数少 1。
+ * 全脚本有 4 处是 `ok()` / `warn()` 二选一：个人邮箱两处、`.env.example` 缺失一处、
+ * 本机存在 `.env` 一处 —— 而最后那处正是 `apps/server/.env.example` 教每个开发者
+ * 去做的一步（`cp .env.example .env` 再填真值做真实通道联调）。
+ *
+ * 后果：照文档做完联调，`verify:sensitive` 从 15 变 14 → `verify:repo` 33 变 32 →
+ * 总数与 README / 知识库 / todo 里写死的定值不符。**计数漂移会让"数字对不上"变成
+ * 日常噪音，真出问题时反而没人当回事**；而且它把"照文档做事"报成了异常。
+ */
 const warn = (label, detail) => {
+  passed += 1; // 它是一条**已完成**的检查，只是结论为"注意"
   warned += 1;
   console.log(`  [注意] ${label}${detail ? ` —— ${detail}` : ''}`);
 };
@@ -364,7 +377,7 @@ console.log('\n--- 7. 本机的真实密钥文件状态 ---');
 
 /* ==================== 汇总 ==================== */
 
-console.log(`\n结果：${passed} 项通过，${failed} 项失败${warned > 0 ? `，${warned} 项注意` : ''}`);
+console.log(`\n结果：${passed} 项通过${warned > 0 ? `（其中 ${warned} 项注意）` : ''}，${failed} 项失败`);
 if (failed > 0) {
   console.log('\n⚠️ 存在失败项：**处理完再提交 / 再转 public**。历史里的内容删不掉，只能重写历史。');
   process.exitCode = 1;

@@ -25,6 +25,17 @@
  *   理由与 `/api/*` 完全一样：构建产物哈希变了或资源漏打进镜像时，
  *   浏览器会拿到一段 HTML 却按 JS 解析（`Unexpected token '<'`），
  *   而状态码还是 200 —— 排查时会被引到完全错误的方向。
+ * - ⚠️ **判定必须先解码、且不能给扩展名设长度上限**（2026-09-18 修正）。
+ *   原先直接对**未解码**的 `req.path` 匹配 `\.[a-z0-9]{1,8}$`，于是
+ *   `/foo%2Ejs`（编码后的点）、`/manifest.webmanifest`（扩展名超过 8 字符）、
+ *   `/assets/`（结尾带斜杠）三种请求全都绕过判定、拿到 `200` + 首页 HTML ——
+ *   正是这条规则要防的失效。现在：解码后再判、扩展名不限长度、结尾带斜杠的
+ *   目录式请求一律不当作前端路由。解码失败（非法百分号序列）时**按文件处理**，
+ *   同样交给 404（失败要往"更严格"的一侧倒）。
+ * - **运行期产物消失回 404，不回 500**：`res.sendFile` 的 `ENOENT` 曾一路转给
+ *   `errorHandler`，那里没有 `err.status` 分支，于是"index.html 不见了"变成
+ *   `500 INTERNAL` + 一条 error 级日志。本项目自己的 `npm run build:clean`
+ *   就会把 `apps/web/dist` 挪走，整个重建窗口内早先启动的服务每次访问页面都 500。
  */
 
 import { existsSync } from 'node:fs';
@@ -67,19 +78,41 @@ function isApiPath(path: string): boolean {
 }
 
 /**
- * 是否"看起来是一个具体文件"（路径末段带扩展名）。
+ * 解码**仅用于判定**的请求路径。
  *
- * 回退到 `index.html` 只应服务于**前端路由**（`/dashboard` 这类无扩展名的路径）。
- * 带扩展名的请求是在指名要一个文件：取不到就该 404。
- * 返回首页 HTML 却是 200，会让"资源没打进镜像 / 哈希变了"看起来像"页面正常"。
+ * `req.path` 的原值**没有解码**（Express 的 `req.path` 取自 `parseurl().pathname`），
+ * 所以 `/foo%2Ejs` 在判定时看不到那个点。这里解码后再判类别；
+ * **绝不**用解码结果去拼文件路径 —— 真正读文件的仍是 `express.static`（它自带防护）。
  *
- * 本项目前端没有路由表（单页 + 面板切换，见 `apps/web/src`），
- * 现有页面路径里**没有一个带扩展名**，因此这条规则不会挡住任何真实路由。
+ * 非法百分号序列（`decodeURIComponent` 抛错）返回 `null`，
+ * 由调用方按"不是前端路由"处理 —— 判定失败时倒向更严格的一侧。
  */
-const ASSET_LIKE_PATH = /\.[a-z0-9]{1,8}$/i;
+function decodeForClassification(rawPath: string): string | null {
+  try {
+    return decodeURIComponent(rawPath);
+  } catch {
+    return null;
+  }
+}
 
-function looksLikeAsset(path: string): boolean {
-  return ASSET_LIKE_PATH.test(path);
+/**
+ * 是否"看起来是一个具体文件"——即**不该**回退成 `index.html`。
+ *
+ * 回退只应服务于**前端路由**（`/dashboard` 这类无扩展名的路径）。三种情况不算前端路由：
+ * 1. 末段带点（`/favicon.ico`、`/.env`、`/assets/index-abc123.js`、
+ *    `/manifest.webmanifest` —— **不限扩展名长度**）；
+ * 2. 结尾带斜杠（`/assets/`）—— 这是目录式请求，本项目没有任何以 `/` 结尾的路由；
+ * 3. 解码失败（`%zz` 之类）—— 由调用方传 `null` 进来。
+ *
+ * 注意判定只看**最后一段**：`/v1.2/dashboard` 里的点不算数（本项目也没有这种路由）。
+ * 根路径 `/` 单独放行，它是首页本身。
+ */
+function looksLikeAsset(decodedPath: string | null): boolean {
+  if (decodedPath === null) return true; // 判定失败 → 按文件处理，交给 404
+  if (decodedPath === '/') return false; // 根路径就是首页
+  if (decodedPath.endsWith('/')) return true; // 目录式请求，不是路由
+  const lastSegment = decodedPath.slice(decodedPath.lastIndexOf('/') + 1);
+  return lastSegment.includes('.');
 }
 
 export interface ServeWebOptions {
@@ -129,12 +162,37 @@ export function mountWebApp(app: Express, options: ServeWebOptions = {}): ServeW
       next();
       return;
     }
-    if (isApiPath(req.path) || looksLikeAsset(req.path)) {
+    const decoded = decodeForClassification(req.path);
+    // 解码后的路径也要判一次 `/api`：`/api%2Ffoo` 的原值不以 `/api/` 开头，
+    // 但它是接口，不该被吞成首页。
+    if (isApiPath(req.path) || isApiPath(decoded ?? '') || looksLikeAsset(decoded)) {
       next();
       return;
     }
     res.sendFile(indexHtml, (error) => {
-      if (error) next(error);
+      if (!error) return;
+
+      /*
+       * 运行期 index.html 消失 → **404**，不是 500。
+       *
+       * 这不是"我们有缺陷"，而是"这个资源现在不存在"：`npm run build:clean`
+       * 会把 `apps/web/dist` 整个挪走，重建窗口内每次访问页面都会走到这里。
+       * 原先一律 `next(error)`，而 `errorHandler` 没有 `err.status` 分支，
+       * 于是给出 `500 INTERNAL` 并记一条 error 级 `http.unhandled` —— 把
+       * "正在重建"报成"服务端故障"，还污染了真正需要关注的错误日志。
+       */
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ENAMETOOLONG') {
+        logger.warn('web.index.missing', { path: req.path, code });
+        res
+          .status(404)
+          .type('text/plain; charset=utf-8')
+          .send('页面资源暂不可用：前端产物不在当前目录（可能正在重新构建）。');
+        return;
+      }
+
+      // 其余错误（权限、磁盘等）仍属服务端异常，交给统一错误处理
+      next(error);
     });
   };
   app.use(serveIndex);

@@ -12,7 +12,20 @@
  * 5. **写请求不回退**：POST 到未知路径不能返回首页 HTML；
  * 6. **"看起来是文件"的路径不回退**（2026-09-18 补）：取不到的静态资源、
  *    `/favicon.ico`、`/.env` 必须 404，不能被回退成 200 + 首页；
- *    同时确认**前缀相近但不是接口**的 `/apifoo` 仍会正常回退。
+ *    同时确认**前缀相近但不是接口**的 `/apifoo` 仍会正常回退；
+ * 7. **判定的三个漏口**（2026-09-18 补，`I22`）：编码后的点号（`/foo%2Ejs`）、
+ *    超过 8 字符的扩展名（`/manifest.webmanifest`）、结尾带斜杠（`/assets/`）
+ *    一律 404；非法百分号序列（`/%zz`）与编码斜杠的接口路径（`/api%2Funknown`）
+ *    同样不回退；
+ * 8. **运行期产物消失是 404 而非 500**（2026-09-18 补，`I23`）：服务运行中
+ *    `index.html` 被移走（`build:clean` 的重建窗口）不得报成服务端故障；
+ * 9. **自动探测真的生效**（2026-09-18 修正，`I24`）：造出 `apps/web/dist` 后
+ *    不传目录也必须找到 —— 原先那条断言是恒真式，覆盖不到
+ *    `candidateWebDistDirs()`。
+ *
+ * ⚠️ 这里**没有**覆盖 `src/index.ts` 的挂载顺序（`/api` 之后、错误处理之前）：
+ * 本脚本用的是自建的 Express 管线，顺序正确性只能靠 index.ts 自身保证。
+ * 需要时单独补一条针对入口文件的断言。
  *
  * 断言一律**同时看状态码与内容**：只看"不是首页 HTML"是不够的 ——
  * 返回 500 也会满足那个条件，等于什么都没锁住。
@@ -23,9 +36,11 @@
  *   npm run verify:serve-web
  */
 
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { mountWebApp } from '../src/http/serve-web.js';
 
@@ -176,6 +191,72 @@ console.log('1. 前端产物存在时');
     `实际 ${apiLike.status}`,
   );
 
+  /*
+   * ★ 判定的三个漏口（2026-09-18 补，`I22`）。
+   *
+   * 修复前这四条**全部**会拿到 200 + 首页 HTML，而它们是同一个失效的另外三个入口：
+   * ① `req.path` 没有解码 → `/foo%2Ejs` 的"点"在判定时看不见；
+   * ② 扩展名正则带 `{1,8}` 长度上限 → `/manifest.webmanifest` 判不出"是文件"；
+   * ③ 结尾带斜杠（`/assets/`）是目录式请求，不是前端路由。
+   * 浏览器拿到 HTML 却按 JS 解析，报 `Unexpected token '<'`，而状态码是 200 ——
+   * "资源没打进镜像"会看起来像"页面正常"。
+   */
+  const encodedDot = await fetch(`${baseUrl}/foo%2Ejs`);
+  const encodedDotText = await encodedDot.text();
+  check(
+    '★ 编码后的点号（/foo%2Ejs）不返回首页',
+    encodedDot.status === 404 && !encodedDotText.includes(INDEX_MARK),
+    `实际 ${encodedDot.status}`,
+  );
+
+  const encodedDotInAssets = await fetch(`${baseUrl}/assets/not-built%2Ejs`);
+  const encodedDotInAssetsText = await encodedDotInAssets.text();
+  check(
+    '★ 编码点号在资源目录下同样 404',
+    encodedDotInAssets.status === 404 && !encodedDotInAssetsText.includes(INDEX_MARK),
+    `实际 ${encodedDotInAssets.status}`,
+  );
+
+  const longExtension = await fetch(`${baseUrl}/manifest.webmanifest`);
+  const longExtensionText = await longExtension.text();
+  check(
+    '★ 超过 8 字符的扩展名（/manifest.webmanifest）不返回首页',
+    longExtension.status === 404 && !longExtensionText.includes(INDEX_MARK),
+    `实际 ${longExtension.status}`,
+  );
+
+  const trailingSlash = await fetch(`${baseUrl}/assets/`);
+  const trailingSlashText = await trailingSlash.text();
+  check(
+    '★ 结尾带斜杠（/assets/）不返回首页',
+    trailingSlash.status === 404 && !trailingSlashText.includes(INDEX_MARK),
+    `实际 ${trailingSlash.status}`,
+  );
+
+  /*
+   * 失败要往严格的一侧倒：非法百分号序列**不能**被当成前端路由。
+   * 解码失败时若按"无扩展名 → 路由"处理，`/%zz` 会拿到首页，判定就没有守住了。
+   */
+  const malformed = await fetch(`${baseUrl}/%zz`);
+  const malformedText = await malformed.text();
+  check(
+    '★ 非法百分号序列（/%zz）不返回首页',
+    malformed.status === 404 && !malformedText.includes(INDEX_MARK),
+    `实际 ${malformed.status}`,
+  );
+
+  /*
+   * 编码过的斜杠也要认得出来是接口：`req.path` 原值是 `/api%2Funknown`，
+   * 不以 `/api/` 开头，若只判原值就会被吞成首页。
+   */
+  const encodedSlashApi = await fetch(`${baseUrl}/api%2Funknown`);
+  const encodedSlashApiText = await encodedSlashApi.text();
+  check(
+    '★ 编码斜杠的接口路径（/api%2Funknown）不返回首页',
+    encodedSlashApi.status === 404 && !encodedSlashApiText.includes(INDEX_MARK),
+    `实际 ${encodedSlashApi.status}`,
+  );
+
   await close();
 }
 
@@ -201,17 +282,86 @@ console.log('\n2. 前端产物不存在时（纯后端联调场景）');
   await close();
 }
 
+/* ---------- 2b. 运行期产物消失：必须 404，不能 500 ---------- */
+console.log('\n2b. 服务运行中前端产物被移走（重建窗口）');
+{
+  /*
+   * `I23`：`res.sendFile` 的错误原先一律 `next(error)`，而 `errorHandler` 没有
+   * `err.status` 分支，于是"index.html 不见了"变成 **500 INTERNAL** + 一条 error 级
+   * `http.unhandled` 日志。本项目自己的 `npm run build:clean` 就会把
+   * `apps/web/dist` 挪进回收站 —— 整个重建窗口内，早先启动的服务每次访问页面都 500，
+   * 把"正在重建"报成"服务端故障"，还污染了真正需要关注的错误日志。
+   */
+  const webDist = await makeFakeWebDist();
+  tmpDirs.push(webDist);
+  const { baseUrl, close } = await startServer(webDist);
+
+  const before = await fetch(`${baseUrl}/`);
+  check('移走之前 GET / 正常', before.status === 200, `实际 ${before.status}`);
+
+  await rm(join(webDist, 'index.html'), { force: true });
+
+  const home = await fetch(`${baseUrl}/`);
+  const homeText = await home.text();
+  check(
+    '★ 产物消失后 GET / 是 404（不是 500）',
+    home.status === 404,
+    `实际 ${home.status}${home.status === 500 ? ' —— 又落回 INTERNAL 了' : ''}`,
+  );
+  check('★ 产物消失后不返回首页 HTML', !homeText.includes(INDEX_MARK));
+
+  await close();
+}
+
 /* ---------- 3. 自动探测：默认不传目录也能找到 ---------- */
 console.log('\n3. 自动探测（不传 webDistDir）');
 {
-  // 仓库里 apps/web/dist 是否存在取决于有没有构建过，两种结果都算通过，
-  // 这里只断言「不崩、返回结构正确」。
+  /*
+   * `I24`（2026-09-18 修正）：原先这里只有一条**恒真式** ——
+   * `typeof result.mounted === 'boolean' && result.webDistDir !== undefined`。
+   * `mountWebApp` 必然返回 boolean，而 `webDistDir` 的类型是 `string | null`，
+   * 于是任何"不崩"的返回值都能满足它。把 `candidateWebDistDirs()` 改成 `return []`，
+   * 脚本仍然全绿 —— 而那个函数决定了 CloudBase 容器里能不能提供页面。
+   *
+   * 现在分两层断言：
+   * ① **返回值必须自洽**（挂载了就必须给出真实存在的 index.html，没挂载就必须是 null）；
+   * ② **独立重算候选表**并比对结果。
+   *
+   * ⚠️ ② 里刻意**重写**了一遍候选目录，而不是从模块里 import 那个函数：
+   * 与实现同源的断言无法发现"实现被清空"（`return []` 时两边会一起变空、断言恒真）。
+   * 代价是两处需要同步，所以这里把那四条候选按文档顺序抄下来 —— 它们是模块 doc 里
+   * 写死的公开约定，不是实现细节。
+   */
   const { result, close } = await startServer(undefined);
-  check('不传目录时返回结构正确', typeof result.mounted === 'boolean' && result.webDistDir !== undefined);
+  check(
+    '不传目录时返回值自洽（挂载⇒目录真实存在；未挂载⇒null）',
+    typeof result.mounted === 'boolean' &&
+      (result.mounted
+        ? typeof result.webDistDir === 'string' && existsSync(join(result.webDistDir, 'index.html'))
+        : result.webDistDir === null),
+    `mounted=${result.mounted} webDistDir=${String(result.webDistDir)}`,
+  );
   console.log(
     `        本次探测结果：${result.mounted ? `找到 ${result.webDistDir}` : '未找到（正常，可能尚未构建前端）'}`,
   );
   await close();
+
+  // 独立复算：模块位置（apps/server/src/http）＋ cwd，与 `serve-web.ts` 的 doc 一致
+  const moduleDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/http');
+  const documentedCandidates = [
+    resolve(moduleDir, '../../../web/dist'),
+    resolve(moduleDir, '../../web/dist'),
+    resolve(process.cwd(), '../web/dist'),
+    resolve(process.cwd(), 'apps/web/dist'),
+  ];
+  const anyCandidateExists = documentedCandidates.some((dir) =>
+    existsSync(join(dir, 'index.html')),
+  );
+  check(
+    '★ 自动探测结果与"候选目录是否存在"一致（候选表被清空会在这里失败）',
+    result.mounted === anyCandidateExists,
+    `mounted=${result.mounted}，但候选里${anyCandidateExists ? '有' : '没有'}index.html`,
+  );
 }
 
 // 清理临时目录
