@@ -73,11 +73,30 @@ const outDir = process.env.PACK_DEPLOY_OUT
  *    （默认的 `deploy-dist/` 在排除名单里，所以默认用法是安全的。）
  *
  * 判定必须发生在**任何删除动作之前**，并且宁可拒跑也不"尽力而为"。
+ *
+ * ⚠️ **不能复用 `EXCLUDE_DIRS` 当"可安全删除"的名单**（2026-09-18 复审补）：
+ * 那是"不打进包里"的名单，而里面恰好有 `.git` 与 `.learnbuddy` —— 它们不打进包
+ * 是对的，但更**不能被删**。混用会出现 `PACK_DEPLOY_OUT=<仓库>/.git` 先通过校验、
+ * 随后被 `prepareOutDir()` 整个 `rm -rf`（等于删掉全部提交历史）。
  */
 function isInside(parent, child) {
   const rel = relative(parent, child);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  /*
+   * `rel !== '..'` 与 `'..' + sep` 两处都要判。
+   * 原写法 `!rel.startsWith('..')` 会把**名字以 `..` 开头的目录**（如 `..cache`）
+   * 判成"仓库之外的路径"，于是下面两个分支一起跳过、校验形同不存在，自嵌套复现。
+   */
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
+
+/**
+ * 仓库内**绝不能作为输出目录被删除**的首层目录名。
+ *
+ * 与 `EXCLUDE_DIRS` 是两件事：`EXCLUDE_DIRS` 回答"要不要打进包里"，
+ * 这里回答"删了会不会毁掉不可再生的东西"。`.git` = 全部提交历史，
+ * `.learnbuddy` = 本地记忆与 trash。
+ */
+const NEVER_DELETE_DIRS = new Set(['.git', '.learnbuddy', 'node_modules']);
 
 function assertUsableOutDir(dir) {
   const repoInsideOut = isInside(dir, repoRoot);
@@ -90,6 +109,21 @@ function assertUsableOutDir(dir) {
     console.error(`  输出目录：${dir}`);
     console.error('  继续执行会先对整个仓库递归删除，再把它拷进它自己。已中止，未删除任何东西。');
     console.error('  请把 PACK_DEPLOY_OUT 指到仓库之外的目录，或去掉它使用默认的 deploy-dist/。');
+    process.exit(1);
+  }
+
+  if (insideRepo && NEVER_DELETE_DIRS.has(topSegment)) {
+    console.error(`✗ 输出目录不合法：它指向仓库内的「${topSegment}」，这个目录不允许被删除。`);
+    console.error(`  输出目录：${dir}`);
+    console.error('  `prepareOutDir()` 会先递归删除该目录。已中止，未删除任何东西。');
+    console.error('  请改用仓库之外的目录，或去掉 PACK_DEPLOY_OUT 使用默认的 deploy-dist/。');
+    process.exit(1);
+  }
+
+  // 最后一道保险：目标目录里已经有 `.git` 就不删 —— 覆盖"同一目录的别名"
+  // （软链 / junction / 8.3 短名）这类字符串比较识别不出来的情况。
+  if (existsSync(join(dir, '.git'))) {
+    console.error(`✗ 输出目录不合法：${dir} 里有 .git，它看起来是某个版本库的根。已中止，未删除任何东西。`);
     process.exit(1);
   }
 
