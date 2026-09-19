@@ -51,7 +51,7 @@ import {
   MAX_VOICE_SECONDS,
 } from '@lc/contracts';
 import { env } from '../config/env.js';
-import { describeBuild } from '../config/build-info.js';
+import { describeBuild, describeVersion } from '../config/build-info.js';
 import { logger } from '../logger.js';
 import { createBudget, withBudget } from '../model/budget.js';
 import { ModelError, redact } from '../model/errors.js';
@@ -200,9 +200,36 @@ function toAllowedRefs(session: Session): AllowedRef[] {
   ];
 }
 
+/**
+ * 把校验层的拒绝原因改写成**面向学生**的话术（`I35`）。
+ *
+ * 契约对 `droppedBlocks.reasons` 的定位就是"给学生看的说明"，而
+ * `packages/teaching/src/validate.ts` 的三条 reason 都内插了 `citation.refId`
+ * （补充块的 refId 是 `randomUUID`）—— 前端原样渲染，学生就会看到
+ * 「引用的来源不存在：9f1c2b7a-…」这种内部标识。**内部 id 不该出现在学生界面上**。
+ *
+ * 处置选择：在**服务端**改写（而不是让前端去猜/去截断），原因有二 ——
+ * ① 契约说这些字符串本就是给学生的话术，那就该由产出方保证它可读；
+ * ② 前端截断是"按形态猜"，一旦 reason 文案变化就会静默失效。
+ * 原始文本**不丢**：`/api/tutor` 在丢弃发生时记一条 `tutor.blocks.dropped` 日志，
+ * 排查时仍能看到是哪个 refId 出的问题。
+ */
+function toStudentReason(reason: string): string {
+  if (reason === 'AI 补充内容未经学生授权') return reason; // 本身无 id，可直接展示
+  if (reason.startsWith('引用的来源不存在')) {
+    return '回答引用了本次会话中不存在的来源，因此这一段没有展示';
+  }
+  if (reason.startsWith('引用了未经授权的补充块')) {
+    return '回答引用了你尚未授权使用的补充内容，因此这一段没有展示';
+  }
+  if (reason.startsWith('摘录无法在来源中定位')) {
+    return '回答的摘录无法在你提供的来源里定位，因此这一段没有展示';
+  }
+  return '有一段回答未通过来源校验，因此没有展示';
+}
+
 /** 版本不匹配时拒绝，促使前端丢弃过期响应（说明书 5.3） */
-function assertVersion(session: Session, materialVersion: number): void {
-  if (materialVersion !== session.materialVersion) {
+function assertVersion(session: Session, materialVersion: number): void {  if (materialVersion !== session.materialVersion) {
     throw new ApiError(
       'SESSION_STALE',
       `材料版本已更新（当前 ${session.materialVersion}，请求针对 ${materialVersion}），请基于最新状态重试`,
@@ -222,7 +249,8 @@ apiRouter.post('/session', (_req, res) => {
 apiRouter.get('/health', (_req, res) => {
   const body: HealthResponse = {
     ok: true,
-    version: '0.2.0',
+    // I17 拍板：运行时读 @lc/server 的 package.json；取不到即 null，不硬编码
+    version: describeVersion(),
     modelProvider: adapter.name,
     mock: adapter.isMock,
     verification: VERIFICATION_ENGINE,
@@ -350,6 +378,17 @@ apiRouter.post(
 
     let materials: MaterialSlice[] = [];
     let allowedRefs: AllowedRef[] = [];
+    /*
+     * `I36`（本轮新登记）：**只统计学生自己的材料**，不含 AI 补充块。
+     *
+     * 契约对 `basedOnMaterial` 的定义是「是否基于**学生材料**作答；轻路径为 false」。
+     * 而教学层拿到的是 `toSlices(session)` = 学生材料 **+ 已授权补充块**，它按
+     * `input.materials.length > 0` 计算 → 「只有 AI 补充内容、没有讲义」的会话
+     * 会被报成"基于你的材料作答"，界面据此显示「基于你的材料生成」——
+     * 与学生实际提交的东西不符。这是真实性问题（同 `I20⑦`、`I30` 一类），
+     * 不是体验问题：有来源 ≠ 有学生材料。
+     */
+    let hasStudentMaterial = false;
     if (sessionId !== null) {
       const session = requireSession(sessionId);
       const requestedVersion =
@@ -359,6 +398,7 @@ apiRouter.post(
       assertVersion(session, requestedVersion);
       materials = toSlices(session);
       allowedRefs = toAllowedRefs(session);
+      hasStudentMaterial = session.materials.length > 0;
     }
 
     const result = await teaching.answerQuestion({
@@ -392,10 +432,19 @@ apiRouter.post(
       );
     }
 
+    if (rejected.length > 0) {
+      // I35：原始原因（含 refId）只留在服务端日志里，学生界面拿到的是改写后的话术
+      logger.warn('tutor.blocks.dropped', {
+        count: rejected.length,
+        reasons: rejected.map((item) => item.reason),
+      });
+    }
+
     const response: TutorResponse = {
       scope: result.scope,
       blocks: valid,
-      basedOnMaterial: result.basedOnMaterial,
+      // I36：按契约语义取「有没有学生材料」，不用教学层的切片长度（后者含补充块）
+      basedOnMaterial: hasStudentMaterial,
       ...(result.nextStep ? { nextStep: result.nextStep } : {}),
       /*
        * `I14`：**有块通过时，其余被拒的块不得无声消失**（§4.3「不静默」）。
@@ -407,7 +456,8 @@ apiRouter.post(
         ? {
             droppedBlocks: {
               count: rejected.length,
-              reasons: [...new Set(rejected.map((item) => item.reason))],
+              // I35：先记录原始原因（含内部 refId，供排查），再交给界面用学生话术
+              reasons: [...new Set(rejected.map((item) => toStudentReason(item.reason)))],
             },
           }
         : {}),
@@ -526,11 +576,27 @@ apiRouter.post(
      * 返回的题却被本接口统一标成 `source: 'material'`，前端据此显示
      * 「基于你的材料生成」—— 而题目与学生的材料毫无关系。**这是真实性红线，不是体验问题。**
      * 拒绝并说清该怎么做，比给一组"看起来像基于材料"的题更诚实（§9）。
+     *
+     * ### `I30` 拍板：口径说明（不改契约）
+     *
+     * 同一会话上 `/api/tutor` 会把补充块经 `toSlices()` 当作**可引用来源**，
+     * 而这里只认 `session.materials` —— 两者看似矛盾，实则回答的是**两个不同问题**：
+     * - `/api/tutor` 问「有没有可引用的来源」（学生材料 **或** 已授权补充块）；
+     * - `/api/quiz` 问「有没有**学生自己的材料**」，因为返回的题必须标
+     *   `source: 'material'`，而契约的 `QuizSource` 只有 `'fixed' | 'material'`
+     *   两个取值 —— 拿补充块出的题标成 `'material'` 就是**新的真实性红线**。
+     *
+     * 所以不清一色地放宽判据，而是把**文案**说到与判据一致：会话里只有补充块时，
+     * 明说是"只有 AI 补充内容、没有你的讲义"，而不是笼统一句"还没有材料"
+     * （后者会让学生以为会话是空的，去翻一个其实有内容的会话）。
      */
     if (session.materials.length === 0) {
+      const supplementCount = session.supplements.length;
       throw new ApiError(
         'BAD_REQUEST',
-        '这个学习会话里还没有材料，无法「按我的材料出题」。请先提交讲义，或改用「项目自编题」（不依赖材料）。',
+        supplementCount > 0
+          ? `这个会话里只有 ${supplementCount} 段 AI 补充内容，没有你自己的讲义，因此无法「按我的材料出题」（那会把这些题标成「基于你的材料生成」，与你实际提供的材料不符）。请先提交讲义，或改用「项目自编题」。`
+          : '这个学习会话里还没有材料，无法「按我的材料出题」。请先提交讲义，或改用「项目自编题」（不依赖材料）。',
       );
     }
 

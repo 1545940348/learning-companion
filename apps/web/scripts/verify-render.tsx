@@ -30,6 +30,9 @@ import type {
   WorkbenchActions,
   WorkbenchState,
 } from '../src/hooks/useWorkbench';
+import { CLIENT_TIMEOUT_MS, describeAbort } from '../src/api';
+import { shouldOfferRetry } from '../src/hooks/useWorkbench';
+import { ErrorBoundary } from '../src/app/providers/ErrorBoundary';
 import { GraphPanel } from '../src/components/GraphPanel';
 import { KnowledgePanel } from '../src/components/KnowledgePanel';
 import { MaterialPanel } from '../src/components/MaterialPanel';
@@ -499,6 +502,98 @@ console.log('\n--- 4d. 图谱节点状态：只显示本会话真的做过的判
   );
 }
 
+/* ==================== 4e. 真实生成数据的 id 形态（I34） ==================== */
+
+console.log('\n--- 4e. 节点 id 与前置 conceptId 不重叠时（真实生成数据的形态，I34） ---');
+{
+  /*
+   * ⚠️ 上面 4d 的夹具把**节点 id 与前置 conceptId 手工对齐**了，
+   * 而生成器从不产生这种数据（`apps/server/src/model/index.ts` 的 mock 产出：
+   * 节点 `kp-monotonicity`、前置 `kp-derivative`）—— 因此 4d **锁不住真实场景**。
+   * 这一节用与生成器同形的数据来锁：节点 id 与前置 conceptId 不同名。
+   */
+  const graph: GraphNeighborhood = {
+    sessionId: 's-1',
+    materialVersion: 1,
+    rootConceptId: null,
+    nodes: [
+      { id: 'kp-monotonicity', name: '单调性', explanation: '', citations: [], verification: 'unverified' },
+    ],
+    edges: [],
+  };
+  const prerequisites = [
+    {
+      conceptId: 'kp-derivative',
+      conceptName: '导数',
+      status: 'MISSING' as const,
+      reason: '材料没有导数定义',
+      evidence: [],
+      verification: 'unverified' as const,
+    },
+  ];
+
+  // 材料确实覆盖了该知识点（points[].id 与节点 id 同名且带材料引用）
+  const cited = render(
+    '图谱面板（知识点带材料引用，I34）',
+    <GraphPanel
+      wb={makeWb({
+        graph,
+        knowledge: {
+          points: [
+            {
+              id: 'kp-monotonicity',
+              name: '单调性',
+              explanation: '',
+              citations: [{ sourceType: 'material' as const, refId: 'm-1', excerpt: '' }],
+              verification: 'unverified' as const,
+            },
+          ],
+          prerequisites,
+        },
+      })}
+    />,
+  );
+  const citedLabels = nodeLabels(cited);
+  check(
+    '★ 节点 id 与前置 conceptId 不同名时，仍按知识点自身的材料引用判出「材料已覆盖」（I34）',
+    citedLabels.includes('材料已覆盖'),
+    citedLabels,
+  );
+  check(
+    '★ 不再恒为「未判定」（本会话确实做过覆盖判定）',
+    !cited.includes('没有覆盖判定记录'),
+    cited.includes('没有覆盖判定记录'),
+  );
+
+  // 反例：知识点没有引用 → 仍标「未判定」，不把"模型没给引用"说成"材料未覆盖"
+  const uncited = render(
+    '图谱面板（知识点无引用，I34）',
+    <GraphPanel
+      wb={makeWb({
+        graph,
+        knowledge: {
+          points: [
+            {
+              id: 'kp-monotonicity',
+              name: '单调性',
+              explanation: '',
+              citations: [],
+              verification: 'unverified' as const,
+            },
+          ],
+          prerequisites,
+        },
+      })}
+    />,
+  );
+  const uncitedLabels = nodeLabels(uncited);
+  check(
+    '★ 知识点无引用时仍标「未判定」（不冒充已覆盖，也不改判为未覆盖）',
+    uncitedLabels.includes('未判定') && !uncitedLabels.includes('材料已覆盖'),
+    uncitedLabels,
+  );
+}
+
 /* ==================== 5. 练习 ==================== */
 
 console.log('\n--- 5. 练习面板 ---');
@@ -519,7 +614,19 @@ console.log('\n--- 5. 练习面板 ---');
     '★ 指出替代路径（先提交讲义 / 改用项目自编题）',
     blocked.includes('请先在「材料」面板提交讲义') && blocked.includes('项目自编题'),
   );
-  check('★ 出题按钮被禁用（不是点下去才报错）', /<button class="btn"[^>]*disabled/.test(blocked), null);
+  /*
+   * 这条断言原先用**页面级宽正则** `/<button class="btn"[^>]*disabled/` ——
+   * 页面上**任意一个** `.btn` 被禁用都会让它通过（已登记的弱点）。
+   * 现改为按**按钮文案**定位那一个按钮，再断它带 `disabled`：
+   * 即使将来别的按钮被禁用，这条也只能靠"出题按钮确实被禁用"通过。
+   */
+  const blockedButtons = blocked.match(/<button[^>]*>[\s\S]*?<\/button>/g) ?? [];
+  const startButton = blockedButtons.find((tag) => tag.includes('开始练习'));
+  check(
+    '★ 出题按钮被禁用（按按钮文案定位，不是页面级宽匹配）',
+    Boolean(startButton) && /disabled/.test(startButton ?? ''),
+    startButton ?? null,
+  );
 }
 
 /* ==================== 6. 画像 ==================== */
@@ -550,6 +657,81 @@ console.log('\n--- 6. 画像面板 ---');
   );
   check('★ 如实说明只有「补上这一段」会写入掌握状态', empty.includes('只有「补上这一段」会写入掌握状态'), null);
   check('★ 不再声称「提交一次练习后就会出现」', !empty.includes('提交一次练习后就会出现'));
+}
+
+/* ==================== 7. 提示与重试（I20⑤） ==================== */
+
+console.log('\n--- 7. 重试按钮的显示条件（I20⑤） ---');
+{
+  /*
+   * 这条规则原先只能靠"读 App.tsx 确认"，而它恰恰是错的：
+   * 只要 `canRetry`（上一次动作失败过）为真，**任何**提示上都会挂「重试」——
+   * 包括"已按修正后的内容重建…"这类成功提示，甚至"上一个操作还没完成"
+   * 这种根本不是失败的提示。点它会重放一个与当前提示无关的旧动作。
+   * 现在把判定提成纯函数 `shouldOfferRetry`，语义可以被断言。
+   */
+  check(
+    '★ 与服务端标为可重试的失败提示一起出现',
+    shouldOfferRetry({ kind: 'error', text: '解答失败', retryable: true }, true),
+  );
+  check(
+    '★ 成功提示上不挂重试（即使此前失败过）',
+    !shouldOfferRetry({ kind: 'info', text: '已按修正后的内容重建知识点与依赖关系' }, true),
+  );
+  check(
+    '★ 非失败提示（上一个操作未完成）上不挂重试',
+    !shouldOfferRetry({ kind: 'warn', text: '上一个操作还没完成' }, true),
+  );
+  check('★ 没有失败动作时不挂重试', !shouldOfferRetry({ kind: 'error', text: 'x', retryable: true }, false));
+  check('★ 没有提示时不挂重试', !shouldOfferRetry(null, true));
+}
+
+/* ==================== 8. 阶段 0：兜底与中止（卡 2 / 卡 3） ==================== */
+
+console.log('\n--- 8. ErrorBoundary 与请求中止（阶段 0 卡 2 / 卡 3） ---');
+{
+  /*
+   * ⚠️ **SSR 下错误边界不生效**：`renderToStaticMarkup` 遇到抛错直接抛，
+   * 不会走 `getDerivedStateFromError`。因此"渲染一个会抛错的子组件、断言出现兜底文案"
+   * 这条写法**在本脚本里永远不成立**（要么假失败、要么被绕过后恒真）。
+   * 正确做法：纯逻辑断言 + 正常路径断言。
+   */
+  const derived = ErrorBoundary.getDerivedStateFromError(new Error('boom'));
+  check(
+    '★ ErrorBoundary：捕获后转成兜底状态（纯逻辑，SSR 下走不到这里所以直接调）',
+    derived.hasError === true && derived.message === 'boom',
+    derived,
+  );
+
+  const normal = render(
+    'ErrorBoundary 包裹下的正常子树',
+    <ErrorBoundary label="学习工作台">
+      <p>NORMAL-CHILD-MARK</p>
+    </ErrorBoundary>,
+  );
+  check(
+    '★ ErrorBoundary：无错时原样渲染子树，且不出现兜底文案',
+    normal.includes('NORMAL-CHILD-MARK') && !normal.includes('在渲染时出错了'),
+    normal.slice(0, 120),
+  );
+
+  /*
+   * 卡 3：中止的两种成因必须给出**不同**的说法。
+   * 超时是失败（可重试）；取消是学生主动动作（不该被渲染成失败、也不该给重试）。
+   */
+  const timeout = describeAbort('timeout');
+  const cancelled = describeAbort('cancelled');
+  check(
+    '★ 超时提示可重试，且写明秒数（与服务端 90 s 单次上限区分开）',
+    timeout.retryable === true && timeout.text.includes(String(CLIENT_TIMEOUT_MS / 1000)),
+    timeout,
+  );
+  check('★ 取消**不**标记为可重试（取消不是失败）', cancelled.retryable === false, cancelled);
+  check(
+    '★ 超时与取消的文案不同（混成一句话就无法区分"我的操作失败了"与"我自己按的")',
+    timeout.text !== cancelled.text,
+    { timeout: timeout.text, cancelled: cancelled.text },
+  );
 }
 
 /* ==================== 汇总 ==================== */

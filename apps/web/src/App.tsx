@@ -18,7 +18,7 @@ import { MaterialPanel } from './components/MaterialPanel';
 import { ProfilePanel } from './components/ProfilePanel';
 import { QuizPanel } from './components/QuizPanel';
 import { TutorPanel } from './components/TutorPanel';
-import { useWorkbench } from './hooks/useWorkbench';
+import { shouldOfferRetry, useWorkbench } from './hooks/useWorkbench';
 
 export function App() {
   const wb = useWorkbench();
@@ -79,10 +79,33 @@ export function App() {
         </p>
       )}
 
+      {wb.anyBusy && (
+        /*
+         * 阶段 0 卡 3（`D-03`）：模型通道慢时学生最长要干等 90 秒，而单飞约定会挡住
+         * 其它动作 —— 必须给一个"取消"。取消后由发起那次调用的 catch 给中性提示。
+         */
+        <div className="notice notice-info">
+          <span>
+            正在处理中：模型调用最长可能需要 120 秒。不想等可以取消，已完成的步骤会保留。
+          </span>
+          <button className="btn btn-sm" onClick={wb.cancelPending}>
+            取消
+          </button>
+        </div>
+      )}
+
       {wb.notice && (
         <div className={`notice notice-${wb.notice.kind}`}>
           <span>{wb.notice.text}</span>
-          {wb.canRetry && (
+          {/*
+           * `I20⑤`：重试按钮必须与**当前这条提示**绑定。
+           *
+           * `canRetry` 只是"上一次动作失败过"的全局标志，它和眼前这条提示没有关系 ——
+           * 上一条失败提示被新的普通提示（如"已按修正后的内容重建…"）顶掉之后，
+           * 新提示上仍会挂着「重试」，点了会重放一个与它无关的动作。
+           * 因此再加一条：这条提示本身必须是服务端标了 `retryable` 的失败。
+           */}
+          {shouldOfferRetry(wb.notice, wb.canRetry) && (
             <button className="btn btn-sm" onClick={wb.retryLastFailed} disabled={wb.anyBusy}>
               {wb.anyBusy ? '正在重试…' : '重试'}
             </button>

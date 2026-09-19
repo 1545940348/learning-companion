@@ -79,7 +79,16 @@ export interface BuildInfo {
 
 export interface HealthResponse {
   ok: boolean;
-  version: string;
+  /**
+   * 服务版本 —— 见待决策项 `I17` 的拍板：取 `@lc/server` 的 `package.json` 版本，
+   * **运行时读取，取不到即 `null`**（与 `build.builtAt` 同一思路：不编一个
+   * 看起来合理的值）。原先这里是硬编码 `'0.2.0'`，而五个 `package.json` 都是
+   * `0.1.0` —— 全仓没有 `0.2.0` 的出处，评委对照源码仓库会先看到这个对不上的数字。
+   *
+   * ⚠️ **契约变更**：`string` → `string | null`。已核对消费方 —— `apps/web`
+   * 不读该字段（界面不展示版本号），无调用点受影响。
+   */
+  version: string | null;
   modelProvider: string;
   /** 为 true 表示当前使用 mock 适配器，未接真实模型 */
   mock: boolean;

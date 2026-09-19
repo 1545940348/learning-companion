@@ -260,7 +260,20 @@ else bad('★ 存在未声明的脚本命令（本机能跑，别人 clone 会�
 console.log('\n--- 5. 声明了但似乎没用到的依赖（提示）---');
 {
   const sources = execFileSync('git', ['ls-files'], { encoding: 'utf8' }).split('\n').filter(Boolean);
-  const codeFiles = sources.filter((f) => /\.(ts|tsx|mjs|js|json|css|html)$/.test(f) && !f.endsWith('package-lock.json'));
+  const codeFiles = sources
+    .filter((f) => /\.(ts|tsx|mjs|js|json|css|html)$/.test(f) && !f.endsWith('package-lock.json'))
+    /*
+     * 跳过"在索引里、但工作区已不在"的文件。
+     *
+     * 为什么需要（2026-09-19 实测）：目录重构（`lib/` → `shared/lib/`）期间，
+     * 被移走的文件仍留在索引里，`readFileSync` 直接 `ENOENT` 崩掉整个脚本 ——
+     * 而"跟踪文件与工作区暂时不同步"恰恰是重构期间的**正常中间态**。
+     * 检查工具在这种状态下崩掉会让人以为"重构把检查弄坏了"，
+     * 实际上只是少了一层防御。（本环境删除需要 Windows 绝对路径，见技能
+     * `blocked-file-writes-env`，所以旧文件与旧索引项还会并存一段时间。）
+     */
+    // 与下面的 `readFileSync(f, ...)` 同一套相对路径口径（脚本从仓库根运行）
+    .filter((f) => existsSync(f));
   const blob = codeFiles.map((f) => readFileSync(f, 'utf8')).join('\n') + readmeText;
 
   const unused = [];

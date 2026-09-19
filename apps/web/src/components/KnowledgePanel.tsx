@@ -20,7 +20,7 @@ import {
   VERIFICATION_LABELS,
   statusClass,
   verificationClass,
-} from '../lib/labels';
+} from '../shared/lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions };
 

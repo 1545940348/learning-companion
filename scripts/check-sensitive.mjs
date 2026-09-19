@@ -30,7 +30,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 
 let passed = 0;
 let failed = 0;
@@ -44,7 +44,20 @@ const bad = (label, detail) => {
   failed += 1;
   console.log(`  [失败] ${label}${detail ? ` —— ${detail}` : ''}`);
 };
+/**
+ * 注意项也算**一条做完了的检查**（2026-09-18 修正）。
+ *
+ * 原先 `warn()` 只累加 `warned`、不累加 `passed`，于是同一条检查在"有情况"时计数少 1。
+ * 全脚本有 4 处是 `ok()` / `warn()` 二选一：个人邮箱两处、`.env.example` 缺失一处、
+ * 本机存在 `.env` 一处 —— 而最后那处正是 `apps/server/.env.example` 教每个开发者
+ * 去做的一步（`cp .env.example .env` 再填真值做真实通道联调）。
+ *
+ * 后果：照文档做完联调，`verify:sensitive` 从 15 变 14 → `verify:repo` 33 变 32 →
+ * 总数与 README / 知识库 / todo 里写死的定值不符。**计数漂移会让"数字对不上"变成
+ * 日常噪音，真出问题时反而没人当回事**；而且它把"照文档做事"报成了异常。
+ */
 const warn = (label, detail) => {
+  passed += 1; // 它是一条**已完成**的检查，只是结论为"注意"
   warned += 1;
   console.log(`  [注意] ${label}${detail ? ` —— ${detail}` : ''}`);
 };
@@ -197,7 +210,21 @@ console.log('\n--- 3. 工作区内容：被跟踪文件 + 待提交的未跟踪�
   }
 
   ok(`已扫描 ${scanned} 个文本文件（跳过二进制/超大 ${skipped} 个）`);
-  if (untracked.length > 0) ok(`其中包含 ${untracked.length} 个待提交的未跟踪文件`);
+  /*
+   * ⚠️ 这一条**必须无条件执行**（2026-09-18 修正）。
+   *
+   * 原先写成 `if (untracked.length > 0) ok(...)`：工作区干净时这条**不计入**，
+   * 于是本脚本在干净工作区输出 14 项、有未提交文件时输出 15 项 ——
+   * `verify:repo` 随之在 32 / 33 之间漂移，而 README / 知识库 §9 / todo 的
+   * `P-C5` 三处把 33 与"合计 358"写成了定值。
+   * 后果是：**任何人按文档在干净工作区复核，都会看到 357 并怀疑是自己跑错了。**
+   * 计数必须恒定，"0 个未跟踪文件"同样是一个应当被断言的事实。
+   */
+  ok(
+    untracked.length > 0
+      ? `其中包含 ${untracked.length} 个待提交的未跟踪文件`
+      : '工作区没有待提交的未跟踪文件（已跟踪文件之外无新增）',
+  );
 
   if (secretHits.length === 0) ok('工作区无密钥特征');
   else bad('工作区发现密钥特征', secretHits.slice(0, 5).join(' / '));
@@ -348,9 +375,51 @@ console.log('\n--- 7. 本机的真实密钥文件状态 ---');
   else warn('本机存在 .env —— 确认它被 .gitignore 排除且从未入库', found.join(' / '));
 }
 
+/* ==================== 8. 前端产物里不得出现密钥（阶段 0 卡 7） ==================== */
+
+console.log('\n--- 8. 前端构建产物无密钥（密钥绝不能到浏览器） ---');
+{
+  /*
+   * ### 为什么单独查"产物"
+   *
+   * 前面几节扫的是**源码**与**历史 blob**，而密钥进入前端还有第三条路径：
+   * **Vite 会把 `import.meta.env.VITE_*` 内联进产物**。也就是说，源码里可以完全不出现
+   * 密钥字面量（值来自环境变量），而构建出来的 JS 里明明白白印着它。
+   * 这条断言就是堵这条路 —— 它同时给"密钥只留在服务端"这条设计约束加了机械门禁。
+   *
+   * ### "产物不存在"为什么算通过
+   *
+   * 干净工作区往往还没构建过（`npm run build:clean` 会把 `dist/` 挪走，这是常态）。
+   * 此时这条检查**无法执行**，但不能报失败 —— 否则 `verify:repo` 会随"有没有构建过"
+   * 在两种计数间漂移，而那正是 `I27` 刚修掉的问题。
+   * 处置：通过，并**在标签里说明本项未覆盖**（如实标注，不假装查过）。
+   */
+  const distAssets = 'apps/web/dist/assets';
+  let jsAssets = [];
+  try {
+    jsAssets = readdirSync(distAssets).filter((name) => name.endsWith('.js'));
+  } catch {
+    jsAssets = [];
+  }
+
+  if (jsAssets.length === 0) {
+    ok('前端产物未构建（本项未覆盖；构建后需重跑本脚本）');
+  } else {
+    const hits = [];
+    for (const name of jsAssets) {
+      const text = readFileSync(`${distAssets}/${name}`, 'utf8');
+      for (const [label, regex] of SECRET_PATTERNS) {
+        if (regex.test(text)) hits.push(`${name} 命中「${label}」`);
+      }
+    }
+    if (hits.length === 0) ok(`前端产物 ${jsAssets.length} 个 JS 文件里无密钥特征`);
+    else bad('前端产物里出现密钥特征 —— 密钥已下发到浏览器，属最高级别问题', hits.join('；'));
+  }
+}
+
 /* ==================== 汇总 ==================== */
 
-console.log(`\n结果：${passed} 项通过，${failed} 项失败${warned > 0 ? `，${warned} 项注意` : ''}`);
+console.log(`\n结果：${passed} 项通过${warned > 0 ? `（其中 ${warned} 项注意）` : ''}，${failed} 项失败`);
 if (failed > 0) {
   console.log('\n⚠️ 存在失败项：**处理完再提交 / 再转 public**。历史里的内容删不掉，只能重写历史。');
   process.exitCode = 1;

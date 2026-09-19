@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import type { AnswerBlock, TutorMode } from '@lc/contracts';
 import type { TutorTurn, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
-import { SCOPE_LABELS, SOURCE_LABELS, TUTOR_MODE_LABELS, VERIFICATION_LABELS, verificationClass } from '../lib/labels';
+import { SCOPE_LABELS, SOURCE_LABELS, TUTOR_MODE_LABELS, VERIFICATION_LABELS, verificationClass } from '../shared/lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions; mock: boolean };
 

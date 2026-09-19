@@ -8,7 +8,7 @@
  */
 
 import type { WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
-import { MISCONCEPTION_LABELS, STATUS_LABELS, statusClass } from '../lib/labels';
+import { MISCONCEPTION_LABELS, STATUS_LABELS, statusClass } from '../shared/lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions };
 
@@ -84,7 +84,7 @@ export function ProfilePanel({ wb }: Props) {
           )}
 
           <p className="hint-inline">
-            说明：上述「AI 已补充」表示内容由系统补齐并显著标注，**不等于已验证**。
+            说明：上述「AI 已补充」表示内容由系统补齐并显著标注，「不等于已验证」。
             选择「我已掌握，继续」只影响引导顺序，不会把材料未覆盖改判为已覆盖（§2.3）。
           </p>
         </>

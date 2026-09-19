@@ -19,14 +19,24 @@
     "build": "npm run build -w @lc/server && npm run build -w @lc/web",
     "build:clean": "node scripts/prebuild-clean.mjs",
     "start": "npm run start -w @lc/server",
+    "pack:deploy": "node scripts/pack-deploy.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "verify:sensitive": "node scripts/check-sensitive.mjs",
     "verify:licenses": "node scripts/check-licenses.mjs",
     "verify:prompts": "node scripts/check-prompts.mjs",
     "verify:repo": "npm run verify:sensitive && npm run verify:licenses && npm run verify:prompts",
-    "verify:predeploy": "npm run build:clean && npm run build && npm run verify:dist -w @lc/server && npm run verify:repo"
+    "lint": "eslint .",
+    "lint:boundaries": "depcruise apps packages",
+    "verify:file-size": "node scripts/check-file-size.mjs",
+    "verify:quality": "npm run lint && npm run lint:boundaries && npm run verify:file-size",
+    "verify:predeploy": "npm run build:clean && npm run build && npm run verify:dist -w @lc/server && npm run verify:serve-web -w @lc/server && npm run verify:repo"
   },
   "devDependencies": {
-    "concurrently": "^10.0.5"
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "concurrently": "^10.0.5",
+    "dependency-cruiser": "^18.3.1",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1"
   }
 }

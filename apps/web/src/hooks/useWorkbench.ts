@@ -28,8 +28,8 @@ import type {
   VerificationStatus,
 } from '@lc/contracts';
 import { MATERIAL_LIMITS } from '@lc/contracts';
-import { ApiError, api } from '../api';
-import { loadProgress, saveProgress } from '../lib/persist';
+import { ApiError, RequestAbortedError, api, cancelInFlightRequests, describeAbort } from '../api';
+import { clearProgress, loadProgress, saveProgress } from '../shared/lib/persist';
 
 /**
  * 界面上的一份材料。
@@ -80,6 +80,21 @@ export interface Notice {
   /** 为 true 时界面给「重试」按钮（只在服务端标记 retryable 时为 true） */
   retryable?: boolean;
 }
+
+/**
+ * 练习提交的上报结果（`I33`）。
+ *
+ * 存在的理由：面板要如实说明"这次提交有没有真的写进画像"。
+ * 拿不到这个信息时，界面只能写一句听起来合理的话 —— 而默认自编题路径
+ * **根本没有请求发出**，那句话就是编的。
+ */
+export type QuizReportOutcome =
+  /** 服务端已接受这条画像事件 */
+  | 'sent'
+  /** 本次练习没有学习会话（自编题路径）→ **没有发出任何请求** */
+  | 'no-session'
+  /** 发过请求但失败（不阻断练习，§4.5） */
+  | 'failed';
 
 export interface WorkbenchState {
   sessionId: string | null;
@@ -137,13 +152,23 @@ export interface WorkbenchActions {
    * **只上报 `quiz-attempted`，不上报错题归因**：§2.6 要求归因须给出可核对的理由，
    * 不得仅凭答案对错断言 —— 归因需要诊断 Agent（P1，未实现），
    * 现在硬塞一个"计算错误"到画像里就是编造。
+   *
+   * ### 返回值（`I33`）
+   *
+   * 面板原先无条件写「本次提交已作为一条画像事件上报」，但默认的「项目自编题」
+   * 来源**不会建会话**，`sessionRef.current` 为空 → 函数在开头就 `return`，
+   * **根本没有请求发出**。这是无据声明（与 `I20⑦` 同一类）。
+   * 因此改为把"到底发生了什么"如实交给调用方，由它决定怎么写：
+   * - `'sent'` 服务端已接受这次事件；
+   * - `'no-session'` 本次练习没有学习会话（默认自编题路径）→ **没有发出任何请求**；
+   * - `'failed'` 发出过请求但失败了（不阻断练习，§4.5）。
    */
   reportQuizAttempt: (payload: {
     topic: Topic;
     source: QuizSource;
     total: number;
     correct: number;
-  }) => Promise<void>;
+  }) => Promise<QuizReportOutcome>;
   refreshGraph: (knowledgePointId?: string) => Promise<void>;
   fetchProfile: () => Promise<void>;
   startNewStudy: () => Promise<void>;
@@ -154,6 +179,15 @@ export interface WorkbenchActions {
   ensureMaterialSession: () => Promise<string>;
   /** 指定动作是否正在进行 —— **按钮 disabled 用这个** */
   isBusy: (key: ActionKey) => boolean;
+  /**
+   * 取消当前所有在飞请求（阶段 0 卡 3 / `D-03`）。
+   *
+   * 为什么要它：`MODEL_TIMEOUT_MS = 90 s` 意味着模型通道慢时学生最长要干等 90 秒，
+   * 而单飞约定（`begin()`）会挡住其它动作 —— 没有取消就只能等。
+   * 取消后由**发起那次调用的 catch** 给出中性提示（不报错、不给重试按钮），
+   * 见 `toNotice` 对 `RequestAbortedError` 的分支。
+   */
+  cancelPending: () => number;
   /**
    * 重放上一次失败的动作（§5.4「可重试并保留输入」）。
    *
@@ -191,7 +225,33 @@ function withSessionId(sessionId: string, events: ProfileEventInput[]): ProfileE
 }
 
 function toNotice(error: unknown, fallback: string): Notice {
+  /*
+   * 阶段 0 卡 3：中止必须**分成两类**再决定怎么说（`describeAbort` 是纯函数，有断言）。
+   * 超时 → 失败提示 + 可重试；取消 → 中性提示、**不给重试按钮**
+   * （学生自己按的取消不该被渲染成"你失败了"）。
+   */
+  if (error instanceof RequestAbortedError) {
+    const described = describeAbort(error.kind);
+    return error.kind === 'timeout'
+      ? { kind: 'error', text: described.text, retryable: described.retryable }
+      : { kind: 'info', text: described.text };
+  }
   if (error instanceof ApiError) {
+    if (error.code === 'NOT_FOUND') {
+      /*
+       * 清理时机 ②（阶段 0 卡 4 / `D-06`）：会话已不存在 → 本地快照必须清掉。
+       *
+       * 服务端的会话是**内存态**（云托管缩容或重启即全部消失），而本地
+       * sessionStorage 里的快照会活得更久 —— 于是"刷新恢复"会恢复出一个
+       * **指向不存在会话的幽灵会话**：材料显示着、但每次操作都 404。
+       * 提示里要说清"为什么"，否则学生只会觉得"这功能坏了"。
+       */
+      clearProgress();
+      return {
+        kind: 'warn',
+        text: `${error.message}（服务端会话已不存在或已重启，本地保存的进度已清理，请重新提交材料）`,
+      };
+    }
     return { kind: 'error', text: error.message, retryable: error.retryable };
   }
   return { kind: 'error', text: fallback };
@@ -210,6 +270,22 @@ const ACTION_LABELS: Record<ActionKey, string> = {
   quiz: '获取练习',
   profile: '读取画像',
 };
+
+/**
+ * 是否展示「重试」按钮（`I20⑤`）。
+ *
+ * 两个条件**缺一不可**：
+ * 1. `canRetry` —— 上一次动作确实失败过（否则没有可重放的动作）；
+ * 2. 当前这条提示本身带 `retryable` —— 它是服务端标为可重试的那次失败。
+ *
+ * 只有第 1 条时，任何一条普通提示（"已按修正后的内容重建…"，
+ * 甚至"上一个操作还没完成"这种**并非失败**的提示）都会被挂上「重试」，
+ * 点下去重放的是与它无关的旧动作。抽成纯函数是为了让这条语义能被断言，
+ * 而不是只靠读代码确认。
+ */
+export function shouldOfferRetry(notice: Notice | null, canRetry: boolean): boolean {
+  return canRetry && notice?.retryable === true;
+}
 
 export function useWorkbench(): WorkbenchState & WorkbenchActions {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -329,6 +405,24 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
       savedAt: new Date().toISOString(),
     });
   }, [sessionId, materialVersion, materials]);
+
+  /**
+   * 清理时机 ③（阶段 0 卡 4 / `D-06`）：**页面卸载时清掉学生材料原文**。
+   *
+   * 材料原文（可能含个人信息或内部教材）原先**只写不清**：`clearProgress()` 全仓无调用点。
+   * 用 `pagehide` 而不是 `beforeunload`：前者在移动端与"进后台"时也会触发，
+   * 且 `beforeunload` 在部分浏览器里要求同步处理、容易被忽略。
+   * 演示场景里评委关掉标签页即不留原文。
+   */
+  useEffect(() => {
+    const onHide = () => {
+      clearProgress();
+    };
+    window.addEventListener('pagehide', onHide);
+    return () => {
+      window.removeEventListener('pagehide', onHide);
+    };
+  }, []);
 
   /** 当前版本是否仍是发出请求时的版本（§5.4 护栏） */
   const stillCurrent = useCallback((versionAtRequest: number): boolean => {
@@ -485,7 +579,24 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
           item.id === materialId ? { ...item, text: nextText, corrected: true } : item,
         ),
       );
-      await submitMaterials([nextText]);
+      /*
+       * `I20③`：**先看结果再宣告**。
+       *
+       * 原先无条件写「已按修正后的内容重建知识点与依赖关系」，即使
+       * `submitMaterials` 失败（超长、识别层报错、版本冲突…）也照写 ——
+       * 成功文案会把失败提示直接顶掉，学生以为改好了；
+       * 更麻烦的是本地文本已经改成新内容、服务端仍是旧的，两边不是一套事实。
+       * 现在失败即回滚本地修正，并把失败提示留在界面上（由 submitMaterials 抛出）。
+       */
+      const rebuilt = await submitMaterials([nextText]);
+      if (!rebuilt) {
+        setMaterials((previous) =>
+          previous.map((item) =>
+            item.id === materialId ? { ...item, text: target.text, corrected: target.corrected } : item,
+          ),
+        );
+        return;
+      }
       setNotice({
         kind: 'info',
         text: '已按修正后的内容重建知识点与依赖关系，先前的回答已标记「依据已更新」。',
@@ -674,9 +785,15 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
   /* ---------- 图谱与画像 ---------- */
 
   const reportQuizAttempt = useCallback(
-    async (payload: { topic: Topic; source: QuizSource; total: number; correct: number }) => {
+    async (payload: {
+      topic: Topic;
+      source: QuizSource;
+      total: number;
+      correct: number;
+    }): Promise<QuizReportOutcome> => {
       const id = sessionRef.current;
-      if (!id) return;
+      // I33：自编题路径没有会话 → 这里**没有发出任何请求**，必须如实告诉界面
+      if (!id) return 'no-session';
       try {
         const next = await api.profile({
           sessionId: id,
@@ -689,8 +806,10 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
           ]),
         });
         setProfile(next);
+        return 'sent';
       } catch {
         // 画像写入失败不阻断练习（§4.5：任一 Agent 失败不影响主流程）
+        return 'failed';
       }
     },
     [],
@@ -749,6 +868,14 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
       // 新会话的图谱是空的，旧的选中项没有任何意义
       setFocusedNodeId(null);
       clearFailure();
+      /*
+       * 清理时机 ①（阶段 0 卡 4 / `D-06`）：新会话已建好 → 明确清掉旧的本地快照。
+       *
+       * 刻意放在**创建成功之后**：创建失败时旧快照仍能用于"刷新恢复"，
+       * 先清会让一次网络抖动变成"进度全丢"。也不依赖"下一次覆盖写"——
+       * 覆盖写失败（配额/隐私模式）时旧原文会一直在。
+       */
+      clearProgress();
       setGraph({
         sessionId: session.id,
         materialVersion: session.materialVersion,
@@ -814,6 +941,14 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
 
   const isBusy = useCallback((key: ActionKey) => pending.includes(key), [pending]);
 
+  /**
+   * 取消所有在飞请求（阶段 0 卡 3）。返回被取消的数量。
+   *
+   * 这里**刻意不发提示**：取消是学生主动动作，提示交给发起那次调用的 `catch`
+   * （它会走 `toNotice` 的中性分支）。两处都发就会出现两条提示。
+   */
+  const cancelPending = useCallback(() => cancelInFlightRequests(), []);
+
   return {
     sessionId,
     materialVersion,
@@ -841,6 +976,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     startNewStudy,
     dismissNotice,
     notify,
+    cancelPending,
     ensureMaterialSession,
     isBusy,
     retryLastFailed,

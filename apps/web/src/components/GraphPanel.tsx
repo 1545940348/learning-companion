@@ -17,7 +17,7 @@
 import { useEffect, useRef } from 'react';
 import type { PrerequisiteStatus } from '@lc/contracts';
 import type { GapRecord, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
-import { SOURCE_LABELS, STATUS_LABELS } from '../lib/labels';
+import { SOURCE_LABELS, STATUS_LABELS } from '../shared/lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions };
 
@@ -30,14 +30,31 @@ const GAP_Y = 44;
 const UNDETERMINED_LABEL = '未判定';
 
 /**
- * 取该节点**本会话实际记录**的覆盖状态（`I20①`）。
+ * 取该节点**本会话实际记录**的覆盖状态（`I20①`，第三个来源见 `I34`）。
  *
- * 优先用补充记录（学生刚点过「补上这一段」），其次用 `/api/knowledge` 返回的前置关系判定；
- * 两者都没有就返回 `null`，由调用方如实标注「未判定」。
+ * 判定顺序：
+ * 1. **补充记录**（学生刚点过「补上这一段」）—— 最新、优先；
+ * 2. **前置关系判定**（`/api/knowledge` 的 `prerequisites[].conceptId`）—— 节点本身作为前置概念出现时；
+ * 3. **知识点自身的材料引用**（`points[].id === nodeId` 且 `citations` 非空）→ `LOCAL`。
+ *
+ * 三者都没有就返回 `null`，由调用方如实标注「未判定」。
  *
  * 原先写的是 `wb.gaps[node.id]?.status`，缺失时直接显示「材料已覆盖」——
  * 而 `gaps` 只在点过「补上这一段」之后才有条目，于是**每个节点默认都显示"材料已覆盖"**，
  * 与同一面板详情里的「暂无引用」自相矛盾（LOCAL 的定义要求"能定位来源"）。
+ *
+ * ### 为什么必须补第 3 条（`I34`）
+ *
+ * 图谱节点来自 `points[].id`（如 `kp-monotonicity`），而"覆盖判定"原先只在
+ * `prerequisites[].conceptId` 里找（如 `kp-derivative`）—— 这两个是**不同的东西**：
+ * 前置概念讲的是"学这个之前需要什么"，知识点讲的是"这里有什么"。
+ * 生成器产出的数据里两者从不重叠（示例数据：节点 `kp-monotonicity`，
+ * 前置 `kp-derivative`），于是**每个节点恒落 `null` → 永久「未判定」**，
+ * 哪怕材料里确实覆盖了它、`points[].citations` 里就有可定位的原文。
+ *
+ * ⚠️ 只在 `citations` **非空**时才判 `LOCAL`：契约对 LOCAL 的定义是
+ * "能定位到原文"，没有引用就不是一次覆盖判定 —— 此时仍标「未判定」，
+ * 不把"模型没给引用"说成"材料未覆盖"（那也是一次它没做过的判定）。
  */
 function nodeStatus(
   nodeId: string,
@@ -47,7 +64,10 @@ function nodeStatus(
   const gap = gaps[nodeId];
   if (gap) return gap.status;
   const relation = knowledge?.prerequisites.find((item) => item.conceptId === nodeId);
-  return relation ? relation.status : null;
+  if (relation) return relation.status;
+  const point = knowledge?.points.find((item) => item.id === nodeId);
+  if (point && point.citations.length > 0) return 'LOCAL';
+  return null;
 }
 
 export function GraphPanel({ wb }: Props) {

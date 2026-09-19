@@ -240,5 +240,81 @@ check(
   { status: emptyQuiz.status, error: emptyQuiz.json?.error ?? null },
 );
 
+/*
+ * 15. `I29` / `I31`：**零材料会话 + 一个已授权补充块** 上提问，原先必然 403。
+ *
+ * 这条路径与上面 13 组**不同**：会话里没有学生材料，但有一个学生点过「补上这一段」
+ * 生成的补充块（`/api/gap` 在 `materialVersion 0` 的会话上本就允许成功，是合法状态）。
+ * 修复前：mock 恒返回**不带引用**的 `ai-supplement` 块 → 被来源守卫拒（403 且
+ * `retryable=false`），学生卡死 —— 正是 `I13` 要消灭的那条死路换了个入口。
+ *
+ * 根因是 **mock 保真度**（忽略 `supplementIds`），不是守卫过严：
+ * 守卫的语义是"回答必须能追溯到真实存在的来源"，无引用即拒。
+ */
+const supplementSession = (await call('POST', '/api/session')).json;
+const filledGap = await call('POST', '/api/gap', {
+  sessionId: supplementSession.id,
+  materialVersion: 0,
+  conceptId: 'kp-derivative',
+  reason: '判断单调性依赖导数定义，学生讲义里没有这一段。',
+});
+check(
+  '⑮ 零材料会话上补缺口成功（materialVersion 0 是合法状态）',
+  filledGap.status === 200 && typeof filledGap.json?.supplementBlockId === 'string',
+  { status: filledGap.status, error: filledGap.json?.error ?? null },
+);
+
+const afterGapAsk = await call('POST', '/api/tutor', {
+  sessionId: supplementSession.id,
+  materialVersion: filledGap.json?.materialVersion ?? 1,
+  question: '什么是导数？',
+  mode: 'explain',
+});
+check(
+  '⑮ 有已授权补充块时提问不被拒（修 I29/I31 前是 403 UNAUTHORIZED_CONTENT）',
+  afterGapAsk.status === 200,
+  { status: afterGapAsk.status, error: afterGapAsk.json?.error ?? null },
+);
+check(
+  '⑮ 回答确实引用了那个已授权补充块（mock 保真，I31）',
+  afterGapAsk.json?.blocks?.[0]?.citations?.[0]?.refId === filledGap.json?.supplementBlockId,
+  afterGapAsk.json?.blocks?.[0]?.citations ?? null,
+);
+check(
+  '⑮ 只有补充块、没有学生材料 → basedOnMaterial 仍为 false（I36）',
+  afterGapAsk.json?.basedOnMaterial === false,
+  afterGapAsk.json?.basedOnMaterial,
+);
+
+/*
+ * 16. `I30`：同一会话上 `/api/quiz` 会拒（它只认学生材料），文案必须说清
+ * "只有 AI 补充内容、没有你的讲义"，而不是笼统一句"还没有材料"
+ * —— 后者会让学生以为会话是空的，去翻一个其实有内容的会话。
+ */
+const supplementQuiz = await call('POST', '/api/quiz', {
+  topic: 'monotonicity',
+  source: 'material',
+  sessionId: supplementSession.id,
+});
+check(
+  '⑯ 只有补充块时按材料出题被拒，且文案明说「只有 AI 补充内容」（I30）',
+  supplementQuiz.status === 400 && /AI 补充内容/.test(supplementQuiz.json?.error?.message ?? ''),
+  { status: supplementQuiz.status, message: supplementQuiz.json?.error?.message ?? null },
+);
+
+/*
+ * 17. `I17`：`/api/health` 的 `version` 必须是**运行时读到的包版本**，
+ * 不再是硬编码字符串（原先写死 `'0.2.0'`，而五个 `package.json` 都是 `0.1.0`）。
+ */
+const healthBody = (await call('GET', '/api/health')).json;
+const serverPkgVersion = JSON.parse(
+  await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
+check(
+  '⑰ health.version 运行时取自 @lc/server 的 package.json（不再硬编码，I17）',
+  healthBody?.version === serverPkgVersion,
+  { actual: healthBody?.version ?? null, expected: serverPkgVersion },
+);
+
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);
 process.exitCode = failed > 0 ? 1 : 0;

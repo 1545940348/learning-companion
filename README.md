@@ -174,12 +174,17 @@ docs/
 ## 当前状态
 
 > 口径：**以代码与回归脚本为准，不以设计文档为准**。下面每一句都对应可运行的实现或有断言的脚本。
-> 更新时间 2026-09-17（**缺陷修复 I13–I20 后同步**；上一版为第 8 轮）。
+> 更新时间 2026-09-18（**合并 PR #8 / #9 后同步**；上一版为缺陷修复 I13–I20）。
 
 **核心材料路径可交互运行。** 说明书已更新至 **V2.0**；契约迁移 V2.0 已落地。
-回归脚本 **358 项全部通过**：`verify:all` **190**（`store` 22 / `errors` 34 / `guards` 81 / `graph` 53）、
-`verify:flow` **36**（真实 HTTP）、`verify:dist` **11**（构建产物形态，含**运行形态自证**）、
-`verify:render` **88**（前端渲染冒烟）、`verify:repo` **33**（敏感信息 / 依赖与许可证 / 提示词快照）。
+**前后端同源部署**（`P-C13`）：同一个地址既提供页面也提供 `/api`。
+回归脚本 **425 项全部通过**：`verify:all` **190**（`store` 22 / `errors` 34 / `guards` 81 / `graph` 53）、
+`verify:flow` **42**（真实 HTTP）、`verify:dist` **11**（构建产物形态，含**运行形态自证**）、
+`verify:render` **104**（前端渲染冒烟）、`verify:serve-web` **43**（同源托管：SPA 回退的**边界**、
+编码/超长扩展名/结尾斜杠三种绕过、产物消失时 404 而非 500、自动探测、**安全响应头 15 项**）、
+`verify:repo` **35**（敏感信息 / 依赖与许可证 / 提示词快照）。
+另有阶段 0 新增的三条**只告警**的检查：`npm run lint`（ESLint）、`npm run lint:boundaries`
+（`dependency-cruiser`：循环依赖与分层方向）、`npm run verify:file-size`（文件体积）。
 全部为离线或 mock 通道，**不消耗模型额度**。
 
 ### 已实现（可演示）
@@ -199,13 +204,13 @@ docs/
 | **符号验证**（P0） | 引擎选型已定（纯 TS / `mathjs`），**代码未开始**；`/api/gap` 因此只能停在 `SUPPLEMENTED`，`/api/health` 的 `verification.available` 为 `false` | `B3` |
 | **图谱关系边** | 存储层已就绪，但上游模型不返回 `edges` → 图谱**只有节点**；**界面不凭空连线** | `I1` |
 | **多模态解析** | `/api/parse` **目前仅支持纯文字**。**只有图片／只有语音** → `400 BAD_REQUEST` 说明该通道未接入；**文字＋图片** → 200 且把 `image`、`formula` 如实列入 `unavailable[]`。语音入口已就位但明确标注未接入 | `I6` |
-| **在线链接 / 部署** | 尚未部署，四件套中唯一未完成的一件（仓库公开 `B2` **已解除**，剩下的只有托管落地） | `P-C14` |
+| **在线链接 / 部署** | **尚未部署**（四件套中唯一未完成的一件），但**已无未知项**：载体已定（腾讯云 CloudBase 云托管，`D4` 2026-09-18 拍板），**同源托管本地已实现并验证**（`P-C13`，专项 `verify:serve-web` 28 项），只剩在控制台执行。⚠️ 用默认域名打开会先出现一次「访问提示中间页」，点「确定访问」后进入 | `P-C14` |
 | **教师视图 · 多智能体 · 错题归因** | 仅设计（P1），见 `docs/plans/2026-09-17-第6轮-V2.0全量对齐.md` §6；教师视图界面**不渲染空面板** | `I7` `P-A6` |
 | **语音输入** | **入口已就位，识别通道未接入**（与上一行的"仅设计"不同）—— 入口明确说明不可用，不假装可识别 | `P-A7` `I6` |
 
 ### 已知限制
 
-- **无法做浏览器视觉验证**：本环境不可安装 `agent-browser`，只能以 `verify:render`（88 项）做渲染冒烟，
+- **无法做浏览器视觉验证**：本环境不可安装 `agent-browser`，只能以 `verify:render`（104 项）做渲染冒烟，
   **它不替代人眼验收**；提交前需人工按 `docs/specs/微积分学伴_界面验收清单.md` 实点一遍。
 - **真实模型路径尚未在本轮回归中跑过**：DeepSeek 通道此前已用真实密钥验收（文字 1213 ms、图片 3195 ms），
   但当前回归与演示均走 `MODEL_PROVIDER=mock`。
@@ -241,6 +246,11 @@ docs/
 | `vite` | ^6.0.0 | 前端构建与开发服务器 | MIT |
 | `@vitejs/plugin-react` | ^4.3.4 | Vite 的 React 插件 | MIT |
 | `concurrently` | ^10.0.5 | 根 `npm run dev` 同时启动前后端 | MIT |
+| `eslint` | ^10.11.0 | 代码检查（根 `npm run lint`） | MIT |
+| `@typescript-eslint/parser` | ^8.70.0 | ESLint 的 TypeScript 解析器 | MIT |
+| `@typescript-eslint/eslint-plugin` | ^8.70.0 | TypeScript 规则集 | MIT |
+| `eslint-plugin-react-hooks` | ^7.1.1 | hooks 调用顺序与依赖检查 | MIT |
+| `dependency-cruiser` | ^18.3.1 | 依赖边界与循环依赖检查（根 `npm run lint:boundaries`） | MIT |
 | `tsx` | ^4.19.0 | 开发期 TypeScript 运行器 | MIT |
 | `tsup` | ^8.3.0 | 服务端构建 | MIT |
 | `typescript` | ^5.7.0 | 构建与类型检查 | Apache-2.0 |
@@ -256,6 +266,14 @@ docs/
 > 本机装了能跑，**别人 clone 下来 `npm run dev` 会直接失败**（违反补充说明 §5.2「他人可照着跑起来」）。
 > 已补进根 `devDependencies`。`@types/*` 与 `@vitejs/plugin-react` 此前也未在表中声明，一并补齐。
 > 这两类问题现在由 `verify:licenses` 自动拦截。
+
+> **2026-09-19 新增五个开发期依赖**（拆分阶段 0 · `D6` 拍板）：`eslint`、`@typescript-eslint/parser`、
+> `@typescript-eslint/eslint-plugin`、`eslint-plugin-react-hooks`、`dependency-cruiser`。
+> 它们**只用于开发与检查，不进任何运行产物**（前端 bundle 与镜像里都不含）。
+> 配套命令：`npm run lint`（ESLint）、`npm run lint:boundaries`（依赖边界与循环依赖）、
+> `npm run verify:file-size`（文件体积）、`npm run verify:quality`（三者串联）。
+> **阶段 0 一律"只告警不阻断"**：规则文件已入库、能跑出报告，存量违规（如 6 个面板直接
+> import `useWorkbench` 的类型 = 计划书 `D-05`）**如实报出**，转 `error` 是阶段 1 的事。
 
 第三方推理接口的使用方式以赛事方最终答复为准（见 `docs/tech` 模型接入记录的待办项）。
 

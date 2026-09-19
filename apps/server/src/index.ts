@@ -13,6 +13,8 @@
 import express from 'express';
 import { describeModelAdapter, env, validateModelConfig } from './config/env.js';
 import { apiRouter, errorHandler } from './http/routes.js';
+import { mountSecurityHeaders } from './http/security-headers.js';
+import { mountWebApp } from './http/serve-web.js';
 
 // 日志先打出实际通道，再报告配置问题 —— 顺序刻意如此，便于一眼看清"用的是什么、缺什么"
 console.log(`[server] ${describeModelAdapter()}`);
@@ -31,6 +33,13 @@ if (problems.length > 0) {
 
 const app = express();
 
+/*
+ * 安全响应头（阶段 0 · 卡 1 / D-01）：**挂在最前面**，让页面、静态资源、/api、
+ * 404 与错误响应全都带上（详见 http/security-headers.ts 的说明）。
+ * 回滚 = 注释掉这一行。
+ */
+mountSecurityHeaders(app);
+
 // 图片以 base64 传输，上限按 5MB 图片留出余量（说明书 2.2）
 app.use(express.json({ limit: '8mb' }));
 
@@ -44,6 +53,15 @@ app.use(express.json({ limit: '8mb' }));
 // });
 
 app.use('/api', apiRouter);
+
+// 同源托管前端（说明书 V2.0 · P-C13「前后端同源部署」）：
+// 让同一个地址既提供页面、也提供 /api 接口，评委点开一个链接即可使用。
+// 目录不存在时不报错、不阻止启动 —— 只调 /api 的后端联调场景下服务照常可用。
+const web = mountWebApp(app, { webDistDir: env.webDistDir });
+if (web.mounted) {
+  console.log(`[server] 网页目录 ${web.webDistDir}`);
+}
+
 app.use(errorHandler);
 
 app.listen(env.port, () => {

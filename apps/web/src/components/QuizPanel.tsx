@@ -12,7 +12,8 @@ import { useState } from 'react';
 import type { QuizItem, QuizSource, Topic } from '@lc/contracts';
 import { FIXED_QUIZ_PER_TOPIC, TOPIC_LABELS } from '@lc/contracts';
 import type { WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
-import { QUIZ_SOURCE_LABELS, VERIFICATION_LABELS, verificationClass } from '../lib/labels';
+import type { QuizReportOutcome } from '../hooks/useWorkbench';
+import { QUIZ_SOURCE_LABELS, VERIFICATION_LABELS, verificationClass } from '../shared/lib/labels';
 
 type Props = {
   wb: WorkbenchState & WorkbenchActions;
@@ -35,6 +36,22 @@ export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
   const [items, setItems] = useState<QuizItem[] | null>(null);
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
+  /**
+   * 这次提交的画像上报结果（`I33`）。
+   *
+   * 原先这里没有状态，面板直接写死「已作为一条画像事件上报」—— 而默认的
+   * 「项目自编题」来源**不会建会话**，上报函数在开头就返回，**请求根本没发出**。
+   * 现在把真实结果记下来，文案按结果分叉。
+   */
+  const [report, setReport] = useState<QuizReportOutcome | null>(null);
+  /**
+   * 当前这组题**实际是用哪个主题 / 哪个来源取回来的**（`I20②`）。
+   *
+   * 原先上报直接读 `topic` / `source` 两个开关的**当前值**：学生取完题后
+   * 中途点一下切换按钮（题不会重取），上报给画像的 `topic`/`source` 就与实际
+   * 做的那组题不符 —— 画像里的记录张冠李戴。切换开关不等于换了题。
+   */
+  const [loaded, setLoaded] = useState<{ topic: Topic; source: QuizSource } | null>(null);
 
   const busy = wb.isBusy('quiz');
   /**
@@ -48,9 +65,20 @@ export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
 
   async function load() {
     const result = await wb.loadQuiz(topic, source);
+    /*
+     * `I32`：`null` 表示**没取到题**（零材料被拦、或请求失败），
+     * 不等于"这次没有题"。原实现无条件 `setItems(null)` / `setPicked({})` /
+     * `setSubmitted(false)`，于是学生在「答完 → 切到按材料出题（零材料）→
+     * 点『再来一组』」这条路上，**已答结果会被整片抹掉**。
+     * 症状相同、原因不同：拿不到题就不该动现有状态，失败提示已由 hook 抛出。
+     */
+    if (result === null) return;
     setItems(result);
     setPicked({});
     setSubmitted(false);
+    setReport(null);
+    // I20②：记住这组题是用哪个主题/来源取回来的，上报时以它为准
+    setLoaded({ topic, source });
   }
 
   const answered = items ? items.filter((item) => picked[item.id]).length : 0;
@@ -111,7 +139,7 @@ export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
 
       {source === 'fixed' && (
         <p className="hint-inline">
-          自编题每主题 {FIXED_QUIZ_PER_TOPIC} 道，答案唯一。它的解析**不算作你材料的证据**。
+          自编题每主题 {FIXED_QUIZ_PER_TOPIC} 道，答案唯一。它的解析「不算作你材料的证据」。
         </p>
       )}
 
@@ -197,18 +225,22 @@ export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
                   const right = items.filter(
                     (item) => picked[item.id] && picked[item.id] === item.answer,
                   ).length;
-                  void wb.reportQuizAttempt({
-                    topic,
-                    source,
-                    total: items.length,
-                    correct: right,
-                  });
+                  // I20②：上报用的是**已加载题目的**来源，不是当前开关值
+                  const origin = loaded ?? { topic, source };
+                  void wb
+                    .reportQuizAttempt({
+                      topic: origin.topic,
+                      source: origin.source,
+                      total: items.length,
+                      correct: right,
+                    })
+                    .then(setReport);
                 }}
               >
                 {answered < items.length ? `还有 ${items.length - answered} 题未作答` : '提交答案'}
               </button>
             ) : (
-              <button className="btn btn-ghost" onClick={load} disabled={busy}>
+              <button className="btn btn-ghost" onClick={load} disabled={busy || materialBlocked}>
                 再来一组
               </button>
             )}
@@ -216,7 +248,22 @@ export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
 
           {submitted && (
             <p className="hint-inline">
-              本次提交已作为一条画像事件上报（答对 {correct} / {items.length}）。
+              {report === 'sent' && (
+                <>本次提交已作为一条画像事件上报（答对 {correct} / {items.length}）。</>
+              )}
+              {report === 'no-session' && (
+                <>
+                  本次提交「没有」上报画像事件：这一组是「项目自编题」，它不需要学习会话，
+                  因此没有发出任何请求（答对 {correct} / {items.length}）。
+                </>
+              )}
+              {report === 'failed' && (
+                <>
+                  本次提交的画像事件上报失败，画像可能未更新（不影响你的作答与判分：
+                  答对 {correct} / {items.length}）。
+                </>
+              )}
+              {report === null && <>正在上报本次作答（答对 {correct} / {items.length}）…</>}
               但画像里的「常见误区」不会因为这次提交而新增条目 —— 错题归因（概念误解 / 计算错误 /
               条件遗漏 / 识别错误）尚未实现，它需要诊断 Agent 给出可核对的理由，
               仅凭"答错"就下结论会是编造（§2.6）。

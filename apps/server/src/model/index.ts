@@ -14,7 +14,7 @@
  */
 
 import type { ModelCaller, ModelCallOptions, ModelInput } from '@lc/teaching';
-import type { ModelContentBlock } from '@lc/contracts';
+import type { ModelContentBlock, SourceType } from '@lc/contracts';
 import { createDeepseekAdapter } from './deepseek.js';
 import { createWorkbuddyModelClient } from './workbuddy.js';
 import { env } from '../config/env.js';
@@ -67,10 +67,9 @@ function parseRefIds(prompt: string): { materialIds: string[]; supplementIds: st
 function mockRespond(prompt: string, options?: ModelCallOptions): string {
   const system = options?.system ?? '';
   const { materialIds, supplementIds } = parseRefIds(prompt);
-  const zeroMaterial = prompt.includes('（学生未提供任何材料）');
 
   if (system.includes('备课模块')) {
-    return mockKnowledge(supplementIds.length > 0);
+    return mockKnowledge(materialIds, supplementIds.length > 0);
   }
   if (system.includes('补充模块')) {
     return MOCK_SUPPLEMENT;
@@ -78,10 +77,19 @@ function mockRespond(prompt: string, options?: ModelCallOptions): string {
   if (system.includes('出题模块')) {
     return mockGeneratedQuiz(materialIds);
   }
-  return mockTutor(materialIds, zeroMaterial);
+  return mockTutor(materialIds, supplementIds);
 }
 
-function mockKnowledge(dependencySupplied: boolean): string {
+function mockKnowledge(materialIds: string[], dependencySupplied: boolean): string {
+  /*
+   * `I34`：知识点要如实带上**材料引用**。
+   *
+   * 知识点的 `citations` 是"这条知识点能不能定位到学生材料原文"的唯一依据
+   * （`LOCAL` 的契约定义就是"能定位来源"）。原先恒为空数组 →
+   * 图谱里哪怕材料确实覆盖了该知识点，也只能落到「未判定」。
+   * mock 已能从提示词解析出材料 id（`parseRefIds`），这里如实引用即可。
+   */
+  const citations = materialIds.map((id) => ({ sourceType: 'material', refId: id, excerpt: '' }));
   return JSON.stringify({
     points: [
       {
@@ -95,7 +103,7 @@ function mockKnowledge(dependencySupplied: boolean): string {
           "把 f'(x) > 0 误读为函数值大于 0",
           '忽略区间前提，直接对整个定义域下结论',
         ],
-        citations: [],
+        citations,
       },
     ],
     prerequisites: [
@@ -160,18 +168,42 @@ function mockGeneratedQuiz(refIds: string[]): string {
   });
 }
 
-function mockTutor(materialIds: string[], zeroMaterial: boolean): string {
-  const sourceType = materialIds.length > 0 ? 'material' : 'ai-supplement';
-  const citations = materialIds[0]
-    ? [{ sourceType: 'material', refId: materialIds[0], excerpt: '' }]
-    : [];
-  const content = zeroMaterial
-    ? '现在没有你的材料，我先按通用知识回答：单调性说的是函数在一个区间上“越来越大”还是“越来越小”。判断方法看导数符号——在区间内 f\'(x) > 0 就递增，f\'(x) < 0 就递减。上传你的讲义后，我可以按你老师的定义方式再讲一遍。'
-    : "根据你的材料：判断 f(x) 在区间上的单调性，只需看 f'(x) 在该区间上的符号。f'(x) > 0 时递增，f'(x) < 0 时递减，f'(x) = 0 的点是可能的分界点，需要单独判断。";
+/**
+ * mock 的答疑回答。
+ *
+ * ### 为什么要接收 `supplementIds`（`I31`）
+ *
+ * 原先只接收 `materialIds`：只要有「已授权的补充块」而**没有学生材料**，
+ * 这个函数就恒返回一个**不带任何引用**的 `ai-supplement` 块。而服务端的来源守卫
+ * （`validateAnswerBlocks`，材料路径下 `requireAuthorization = true`）对
+ * `ai-supplement` 块的要求是「必须引用一个**已授权**的来源」，无引用即被拒 →
+ * `/api/tutor` 返回 403 `UNAUTHORIZED_CONTENT`（`I29` 复现的正是这条死路）。
+ *
+ * 真实模型通常会引用学生已授权的补充块，所以这是 **mock 保真度缺口**，
+ * 不是守卫过严：守卫的语义是「回答必须能追溯到真实存在的来源」，无引用即拒。
+ * 修法是让 mock 也如实引用 —— 而不是放宽守卫。
+ */
+function mockTutor(
+  materialIds: string[],
+  supplementIds: string[],
+): string {
+  // 学生材料优先；没有材料时退而引用已授权的补充块（这正是「补缺口后能继续问」的路径）
+  const hasMaterial = materialIds.length > 0;
+  const refId = materialIds[0] ?? supplementIds[0];
+  const sourceType: SourceType = hasMaterial ? 'material' : 'ai-supplement';
+  const citations = refId ? [{ sourceType, refId, excerpt: '' }] : [];
+  const hasSupplement = !hasMaterial && supplementIds.length > 0;
+
+  const content = hasMaterial
+    ? "根据你的材料：判断 f(x) 在区间上的单调性，只需看 f'(x) 在该区间上的符号。f'(x) > 0 时递增，f'(x) < 0 时递减，f'(x) = 0 的点是可能的分界点，需要单独判断。"
+    : hasSupplement
+      ? "根据你已授权的补充内容（不是你的讲义原文，已标注来源）：判断 f(x) 在区间上的单调性，只需看 f'(x) 在该区间上的符号——f'(x) > 0 递增，f'(x) < 0 递减。补充内容里对「为什么 f'(x) > 0 就递增」给了推导，可以直接对着看。"
+      : '现在没有你的材料，我先按通用知识回答：单调性说的是函数在一个区间上“越来越大”还是“越来越小”。判断方法看导数符号——在区间内 f\'(x) > 0 就递增，f\'(x) < 0 就递减。上传你的讲义后，我可以按你老师的定义方式再讲一遍。';
 
   return JSON.stringify({
-    scope: materialIds.length > 0 ? 'in-material' : 'derivable',
-    basedOnMaterial: materialIds.length > 0,
+    scope: hasMaterial ? 'in-material' : 'derivable',
+    // 补充块由 AI 生成，不是学生材料 —— 引用了它也不等于「基于材料作答」（说明书 2.1）
+    basedOnMaterial: hasMaterial,
     blocks: [{ content, sourceType, citations }],
     nextStep: {
       kind: 'continue',
