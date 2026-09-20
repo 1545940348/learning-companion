@@ -63,7 +63,7 @@ const workspacePkgs = [
 console.log('--- 1. 声明的依赖是否都装得上、许可证是否读到 ---');
 
 const declared = new Map(); // name -> { ranges:Set, workspaces:Set, kind }
-for (const { file, pkg, label } of workspacePkgs) {
+for (const { pkg, label } of workspacePkgs) {
   for (const [kind, table] of [
     ['dependencies', pkg.dependencies ?? {}],
     ['devDependencies', pkg.devDependencies ?? {}],
@@ -226,7 +226,7 @@ const BUILTIN = new Set(['npm', 'node', 'npx', 'cd', 'echo', 'rm', 'cp', 'mv', '
 
 const undeclaredBins = [];
 const checkedBins = new Set();
-for (const { file, pkg, label } of workspacePkgs) {
+for (const { pkg, label } of workspacePkgs) {
   for (const [scriptName, command] of Object.entries(pkg.scripts ?? {})) {
     // 按 shell 连接符拆段，逐段看第一个可执行名
     for (const segment of command.split(/&&|\|\||;/)) {

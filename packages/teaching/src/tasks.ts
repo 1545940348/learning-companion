@@ -284,10 +284,30 @@ export interface SupplementGapInput {
   materials: MaterialSlice[];
 }
 
+export interface SupplementGapOutput {
+  /** 补充正文（纯文本；200—400 字的目标区间由校验层把关） */
+  content: string;
+  /**
+   * 结构化数学断言（`B3`）：**模型不再自己宣称结论是对的**，
+   * 而是把结论写成 `MathClaim` 交给符号引擎逐条核验。
+   * 类型是 `unknown[]`：这里不替校验层假定形状，形状非法由 `symbolic.ts` 判 `unverified`。
+   */
+  claims: unknown[];
+}
+
+/**
+ * 生成缺口补充。
+ *
+ * 返回值由 `{content}` 扩为 `{content, claims}`（`B3`）：提示词已改为要求 JSON + 结构化断言。
+ *
+ * ⚠️ **模型没按 JSON 回时的处置**：此时把原文当正文、`claims` 记为空数组
+ * —— 于是验证状态如实落 `unverified`（**不阻断答疑**，也不假装结论已验证）。
+ * 不抛错：抛错会让"模型没照格式回"升级成整条请求失败，而内容本身仍是有用的补充说明。
+ */
 export async function supplementGap(
   call: ModelCaller,
   input: SupplementGapInput,
-): Promise<{ content: string }> {
+): Promise<SupplementGapOutput> {
   const prompt = [
     `需要补齐的前置概念：${input.conceptName}（${input.conceptId}）`,
     `判定为缺口的理由：${input.reason}`,
@@ -296,8 +316,23 @@ export async function supplementGap(
     renderMaterials(input.materials),
   ].join('\n');
 
-  const raw = await call(prompt, { system: SYSTEM_GAP });
-  return { content: raw.trim() };
+  const raw = await call(prompt, { system: SYSTEM_GAP, json: true });
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = extractJson(raw) as Record<string, unknown>;
+  } catch {
+    parsed = null;
+  }
+
+  if (parsed && typeof parsed.content === 'string' && parsed.content.trim().length > 0) {
+    return {
+      content: parsed.content.trim(),
+      claims: Array.isArray(parsed.claims) ? parsed.claims : [],
+    };
+  }
+
+  return { content: raw.trim(), claims: [] };
 }
 
 /* ============ 按材料出题 ============ */

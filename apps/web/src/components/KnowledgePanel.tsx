@@ -210,7 +210,14 @@ function RelationRow({
             </span>
             {gap.verification === 'unverified' && (
               <span className="hint-inline">
-                未经验证的内容不要当成定论；验证引擎接入后会补上校验结果。
+                未经验证的内容不要当成定论：符号引擎没能给出确定结论（可能超出课程范围、超出计算规模，
+                或模型没有给出可校验的结构化断言）。内容照常展示，但不标「已验证」。
+              </span>
+            )}
+            {gap.verification === 'failed' && (
+              <span className="hint-inline">
+                符号引擎给出了<strong>否定</strong>结论：这条补充里的数学结论与推导不一致，
+                已按「验证未通过」处理，请以讲义与人工核验为准。
               </span>
             )}
           </div>

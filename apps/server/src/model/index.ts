@@ -13,11 +13,14 @@
  * - ./smoke.ts     冒烟脚本
  */
 
-import type { ModelCaller, ModelCallOptions, ModelInput } from '@lc/teaching';
+import type { ModelCallOptions, ModelInput } from '@lc/teaching';
 import type { ModelContentBlock, SourceType } from '@lc/contracts';
 import { createDeepseekAdapter } from './deepseek.js';
 import { createWorkbuddyModelClient } from './workbuddy.js';
 import { env } from '../config/env.js';
+// `I38`：`ModelAdapter` 契约已下沉到叶子模块 `./adapter.js`（原因见该文件头）。此处
+// 只为**保持既有导入路径可用**而再导出；本文件与 `deepseek.ts` 之间因此不再有直接边。
+import type { ModelAdapter } from './adapter.js';
 
 /** 取输入中的文本部分。mock 不做图像识别，含图片时只使用其中的文本块。 */
 function toPromptText(input: ModelInput): string {
@@ -29,11 +32,7 @@ function toPromptText(input: ModelInput): string {
   return parts.join('\n\n');
 }
 
-export interface ModelAdapter {
-  name: string;
-  isMock: boolean;
-  call: ModelCaller;
-}
+export type { ModelAdapter };
 
 /* ==================== mock 适配器 ==================== */
 
@@ -41,8 +40,12 @@ export interface ModelAdapter {
  * mock 用于无密钥联调。它按提示词中的模块标识返回结构化假数据，
  * 并复用演示案例：单调性材料缺少导数解释 → MISSING，
  * 一旦出现系统补充块则转为 SUPPLEMENTED，便于前端验证完整闭环。
+ *
+ * **导出是为了可测**（卡 0-4 / `I1`）：`createModelAdapter()` 读环境变量才决定用哪个通道，
+ * 回归脚本里没法保证 `MODEL_PROVIDER=mock`；而"mock 通道到底产不产出关系边"
+ * 必须能被断言 —— 否则演示与录屏走 mock 时，那条"有边"的界面路径**既不能证实也不能证伪**。
  */
-function createMockAdapter(): ModelAdapter {
+export function createMockAdapter(): ModelAdapter {
   return {
     name: 'mock',
     isMock: true,
@@ -72,7 +75,7 @@ function mockRespond(prompt: string, options?: ModelCallOptions): string {
     return mockKnowledge(materialIds, supplementIds.length > 0);
   }
   if (system.includes('补充模块')) {
-    return MOCK_SUPPLEMENT;
+    return mockSupplement();
   }
   if (system.includes('出题模块')) {
     return mockGeneratedQuiz(materialIds);
@@ -115,10 +118,59 @@ function mockKnowledge(materialIds: string[], dependencySupplied: boolean): stri
         evidence: [],
       },
     ],
+    /*
+     * `I1`（卡 0-4）：**mock 也要产出显式关系边**。
+     *
+     * 原先 `mockKnowledge` 只返回 `{points, prerequisites}`，`edges` 零命中 →
+     * 真实通道将来有边、**mock 通道永远无边** → "有边时界面不再显示『没有关系边』"
+     * 这条路径在无密钥的演示/录屏下**既不能证实也不能证伪**（与 `I31`/`I34` 同一条教训：
+     * mock 不保真 → 路径走不通 → 修了也看不到效果）。
+     *
+     * 形状注意：`buildGraph()` 读的是 **`parsed.graph.edges`**（不是顶层 `edges`），
+     * 见 `packages/teaching/src/tasks.ts` 的 `buildGraph(parsed.graph, points)`。
+     *
+     * 方向注意：契约里 `from` = **依赖方**，`to` = **被依赖方**（`contracts/src/knowledge.ts`）。
+     * 所以"单调性依赖导数"写成 `kp-monotonicity → kp-derivative`，
+     * 与 `verify:graph` 里 `{from:'monotonicity', to:'derivative'}` 的写法一致。
+     *
+     * ⚠️ `kp-derivative` **故意不在 `points` 里**：它是材料未覆盖的前置缺口（`MISSING`），
+     * 不是从材料抽出的知识点。因此这条边的 `to` 指向一个**尚未成为节点**的概念 ——
+     * 这是真实存在的数据形态，界面必须如实说明（见 `GraphPanel` 的"未画出连线"提示），
+     * 而不是静默丢边或凭空补一个节点。
+     */
+    graph: {
+      edges: [
+        {
+          from: 'kp-monotonicity',
+          to: 'kp-derivative',
+          kind: 'prerequisite',
+          status: dependencySupplied ? 'SUPPLEMENTED' : 'MISSING',
+          reason: "判断单调性依赖 f'(x) 的符号含义，而符号含义建立在导数定义之上。",
+        },
+      ],
+    },
   });
 }
 
-const MOCK_SUPPLEMENT = `导数是描述函数在一点处变化快慢的量。
+/**
+ * mock 的缺口补充内容（演示数据）。
+ *
+ * ### 为什么它现在是 `{content, claims}` 的 JSON（`B3`）
+ *
+ * 补充模块的提示词已改为**结构化断言**：模型不再"自己宣称数学结论是对的"，
+ * 而是把结论写成 `claims` 交给符号引擎核验（`packages/teaching/src/symbolic.ts`）。
+ * mock 必须跟着改，否则：
+ * - 无密钥的演示/录屏永远拿不到 `claims` → 验证状态永远是 `unverified`，
+ *   `P-B2` 要求的 `MISSING → SUPPLEMENTED → VERIFIED` **走不通也证明不了**；
+ * - 而 mock 正是演示与全部回归走的那条路（与 `I31`/`I34` 同一条教训：mock 不保真）。
+ *
+ * `claims` 里的两条与说明书 §7.1 的固定案例**逐字一致**：
+ * ① 导数：x² 在 1 处导数为 2（正文里就是这么推的）；② 切线：x² 在 (1,1) 处切线为 y = 2x − 1。
+ *
+ * ⚠️ **这是演示数据**：正文里"（以上为系统补充内容，非你上传的讲义。）"这句
+ * **不得为了让画面干净而删掉**（分镜与 §2.3 都要求显著标注为 AI 补充）。
+ */
+const MOCK_SUPPLEMENT_CONTENT = `导数是描述函数在一点处变化快慢的量。
 
 设函数 f(x) 在点 x₀ 附近有定义。若下列极限存在，就称 f 在 x₀ 处可导，该极限值记作 f'(x₀)：
 
@@ -128,11 +180,22 @@ const MOCK_SUPPLEMENT = `导数是描述函数在一点处变化快慢的量。
 
 以 f(x) = x² 在 x₀ = 1 为例：
 [f(1 + Δx) − f(1)] / Δx = [(1 + Δx)² − 1] / Δx = (2Δx + Δx²) / Δx = 2 + Δx，
-令 Δx → 0 得 f'(1) = 2。即曲线 y = x² 在 x = 1 处的瞬时变化率为 2。
+令 Δx → 0 得 f'(1) = 2。即曲线 y = x² 在 x = 1 处的瞬时变化率为 2；
+这条切线过点 (1, 1) 且斜率为 2，方程为 y = 2x − 1。
 
 这正解释了为什么能用 f'(x) 的符号判断单调性：f'(x) 为正表示函数值在增大，为负表示在减小。
 
 （以上为系统补充内容，非你上传的讲义。）`;
+
+/** 与 §7.1 固定案例一致的断言（`expr` 用普通表达式即可，白名单也接受 LaTeX） */
+const MOCK_SUPPLEMENT_CLAIMS = [
+  { kind: 'derivative', expr: 'x^2', at: 1, claimed: 2 },
+  { kind: 'tangent', expr: 'x^2', at: 1, claimed: '2x - 1' },
+];
+
+function mockSupplement(): string {
+  return JSON.stringify({ content: MOCK_SUPPLEMENT_CONTENT, claims: MOCK_SUPPLEMENT_CLAIMS });
+}
 
 function mockGeneratedQuiz(refIds: string[]): string {
   const citation = refIds[0]

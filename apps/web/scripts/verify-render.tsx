@@ -433,6 +433,41 @@ console.log('\n--- 4c. 图谱有边时的渲染：等 I1 交付后即可用这�
     [...flatColumns],
   );
   check('无边时如实说明只有节点', noEdgeHtml.includes('没有关系边'));
+
+  /*
+   * `I1` 落地后新增的数据形态：**有边，但边的端点不是节点**。
+   *
+   * 契约里 `to` 是"被依赖的前置概念"，它可以是材料未覆盖、尚未被抽为节点的概念
+   * （演示案例里正是导数缺口）。这种边画不出线（SVG 需要两端坐标），
+   * 此前被静默丢弃 —— 头部显示"N 关系"却一条线都没有，看的人只会以为界面坏了。
+   */
+  const danglingGraph: GraphNeighborhood = {
+    ...withEdges,
+    edges: [
+      {
+        from: 'kp-mono',
+        to: 'kp-not-extracted',
+        kind: 'prerequisite',
+        status: 'MISSING',
+        reason: '前置缺口概念尚未抽取为节点',
+        evidence: [],
+        verification: 'unverified',
+      },
+    ],
+  };
+  const danglingHtml = render(
+    '图谱面板（边指向尚未抽取为节点的概念）',
+    <GraphPanel wb={makeWb({ graph: danglingGraph })} />,
+  );
+  check(
+    '★ 端点不是节点的边：如实说明"未画出连线"的条数（不静默丢边）',
+    danglingHtml.includes('条关系指向尚未抽取为节点的概念'),
+    null,
+  );
+  check(
+    '★ 反例：端点都是节点时不出现该说明（防止这条断言恒真）',
+    !html.includes('条关系指向尚未抽取为节点的概念'),
+  );
 }
 
 /* ==================== 4d. 图谱节点状态取自真实判定（I20①） ==================== */

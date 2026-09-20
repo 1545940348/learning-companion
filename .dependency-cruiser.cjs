@@ -7,11 +7,20 @@
  * 新人（或 AI）一次深层导入就把边界打破，**没有机械检测**。
  * 本文件就是那个机械检测：把计划书 §8 的分层方向写成可执行规则。
  *
- * ### 阶段 0 一律 `warn`
+ * ### 按规则逐条转 `error`（2026-09-20 订正）
  *
- * 与 `eslint.config.js` 同理：现存违规是**已知的**（`components/**` 直接 import
- * `hooks/useWorkbench` 的类型＝计划书 `D-05`，属阶段 1–4 的活），
- * 现在设 error 会让命令恒红而被无视。阶段 1 起逐条转 `error`。
+ * 原先的写法是"阶段 0 一律 `warn`，阶段 1 起逐条转 `error`"。**订正为：每条规则
+ * 在它**自己**清零之后转 `error`**，不等三处告警全清 —— 后者会把门禁推到阶段 4 之后。
+ *
+ * - `no-circular`：**已于 2026-09-20（`W0-5`/`I38`）清零点，故即转 `error`**。
+ *   转之前先确认它"有牙齿"（当时确实报出 `deepseek.ts ↔ model/index.ts` 的环，
+ *   命令退出码非 0），拆环后再确认转绿 —— 一次真正的红 → 绿。
+ * - `panels-should-not-import-state-internals`：**保持 `warn`**。
+ *   存量是 6/6 面板 → `hooks/useWorkbench`（计划书 `D-05`，属阶段 1–4 的活）。
+ *   ⚠️ 它"自然变空"的时点是**阶段 4**（计划书 §14.5 ④），不是阶段 1：
+ *   阶段 1 只搬路径、不减耦合，届时**必须同批**把本规则的 `from`/`to` 改写成新路径，
+ *   否则转 error 得到的是一个**匹配不到任何模块的门禁**（判据失去分辨力）。
+ * - `shared-must-not-depend-upwards`：保持 `warn`（存量已清零，待确认后转）。
  *
  * ### 为什么用 CJS（`.cjs`）
  *
@@ -27,7 +36,8 @@ module.exports = {
       name: 'no-circular',
       comment:
         '循环依赖：两个模块互相 import。表现为"其中一个在运行时是 undefined"，且随打包顺序漂移。',
-      severity: 'warn',
+      // 2026-09-20（W0-5 / I38）：本条已清零 → 转 error。见文件头「按规则逐条转 error」。
+      severity: 'error',
       from: {},
       to: { circular: true },
     },

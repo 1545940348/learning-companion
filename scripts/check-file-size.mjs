@@ -117,6 +117,7 @@ if (args.includes('--self-check')) {
   console.log('  ✓ 自检通过：超限文件确实会被报出来。\n');
 }
 
-const rows = await report(limit);
-// 阶段 0 只告警：**永远退出码 0**（除非自检失败）。阶段 4 转阻断时改成 `rows.length > 0 ? 1 : 0`
+// 阶段 0 只告警：**永远退出码 0**（除非自检失败）。
+// 阶段 4 转阻断时，把下面两行换成一行：`process.exitCode = Number((await report(limit)).length > 0);`
+await report(limit);
 process.exitCode = 0;

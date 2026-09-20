@@ -35,6 +35,7 @@ import {
   getSession,
 } from '../src/store/index.js';
 import { defaultStatusForApiCode, isRetryableApiCode } from '../src/http/error-response.js';
+import { createMockAdapter } from '../src/model/index.js';
 
 let passed = 0;
 let failed = 0;
@@ -340,6 +341,42 @@ console.log('\n=== 6. 教学模块归一：验证状态、自依赖与循环依�
   // 模型未返回 edges 时只有节点、没有边 —— 不凭 prerequisites 猜 from
   const noEdges = await analyzeKnowledge(fakeCall({ points: [point('a')] }), { materials: [] });
   check('★ 模型未给边时图谱只有节点、不猜关系', noEdges.graph.nodes.length === 1 && noEdges.graph.edges.length === 0);
+}
+
+{
+  /*
+   * 卡 0-4 / `I1`：**mock 通道必须真的产出关系边**。
+   *
+   * 为什么单独一段：无密钥的演示与录屏都走 mock。若 mock 不产出 `edges`，
+   * 那"有边时界面不再显示『没有关系边』"这条前端断言就**只能靠合成图自证** ——
+   * 合成图能证明渲染逻辑对，**证明不了"mock 这条路上真的有边"**
+   * （与 `I31`/`I34` 同一类教训：mock 不保真 → 路径走不通 → 修了也看不到效果）。
+   *
+   * 顺带锁住**方向**：契约里 `from` = 依赖方、`to` = 被依赖方，
+   * 写反了不会报错，但图谱分层与缺口判定都会错。
+   */
+  const mock = createMockAdapter();
+  const mocked = await analyzeKnowledge(mock.call, {
+    materials: [material('m1', "单调性讲义：f'(x) > 0 ⇒ 递增")],
+  });
+
+  check(
+    '★ mock 通道产出显式关系边（此前恒为 0 条，界面永远看不到边）',
+    mocked.graph.edges.length > 0,
+    `edges=${mocked.graph.edges.length}`,
+  );
+  const mockedEdge = mocked.graph.edges[0];
+  check(
+    '★ 边的方向是「依赖方 → 被依赖方」（单调性依赖导数）',
+    mockedEdge.from === 'kp-monotonicity' && mockedEdge.to === 'kp-derivative',
+    `${mockedEdge.from} -> ${mockedEdge.to}`,
+  );
+  check('边的类型缺省为 prerequisite', mockedEdge.kind === 'prerequisite', mockedEdge.kind);
+  check(
+    '★ mock 的边端点与前置关系一致（to === prerequisites[].conceptId）',
+    mocked.prerequisites.some((item) => item.conceptId === mockedEdge.to),
+    mockedEdge.to,
+  );
 }
 
 {

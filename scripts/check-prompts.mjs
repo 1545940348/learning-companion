@@ -11,9 +11,18 @@
  * ### 比对方式
  *
  *   1. 从 `prompt.ts` 抽出所有 `export const NAME = \`...\``；
- *   2. 把 `${COURSE_SCOPE}` / `${NO_FABRICATION}` 这类插值**展开成最终送给模型的完整文本**
+ *   2. **还原模板字面量转义**（`\\` → `\`、`\n` → 换行等，见 `unescapeTemplate`）；
+ *   3. 把 `${COURSE_SCOPE}` / `${NO_FABRICATION}` 这类插值**展开成最终送给模型的完整文本**
  *      （评审要看的是最终文本，不是带 `\${}` 的模板）；
- *   3. 断言展开后的文本**逐字出现在** `docs/tech/2026-09-17-B-提示词与工作流配置.md` 中。
+ *   4. 断言展开后的文本**逐字出现在** `docs/tech/2026-09-17-B-提示词与工作流配置.md` 中。
+ *
+ * ### 第 2 步是 2026-09-20 补的（`B3` 落地时暴露的缺口）
+ *
+ * 原先只展开插值、**不还原转义**，而比对的是**源码原文**。之前所有提示词都不含转义，
+ * 所以一直没暴露。`B3` 要在提示词里写明白名单命令（源码里是 `\\frac`，
+ * 运行时是 `\frac`），于是：文档若照"最终文本"写 `\frac` 就比对失败，
+ * 照源码写 `\\frac` 则**文档不再等于送给模型的内容**（违背本文档的用途）。
+ * 两条路都不能接受 ⇒ 补上转义还原，让文档可以如实写最终文本。
  *
  * ### 用法
  *
@@ -56,11 +65,24 @@ if (constants.size === 0) {
   ok(`从 ${PROMPT_SOURCE} 抽出 ${constants.size} 个常量：${[...constants.keys()].join(' / ')}`);
 }
 
+/** 还原模板字面量里的转义，使比对对象等于**运行时**的字符串（见文件头「第 2 步」） */
+function unescapeTemplate(text) {
+  return text.replace(/\\(\\|n|t|r|`|\$|'|")/g, (_whole, ch) => {
+    if (ch === 'n') return '\n';
+    if (ch === 't') return '\t';
+    if (ch === 'r') return '\r';
+    return ch;
+  });
+}
+
 /** 展开 `${OTHER}` 插值（只支持本项目用到的单层引用，多轮展开到稳定） */
 function expand(text, depth = 0) {
   if (depth > 5) return text;
   if (!/\$\{\w+\}/.test(text)) return text;
-  const next = text.replace(/\$\{(\w+)\}/g, (whole, name) => (constants.has(name) ? constants.get(name) : whole));
+  const next = text.replace(
+    /\$\{(\w+)\}/g,
+    (whole, name) => (constants.has(name) ? unescapeTemplate(constants.get(name)) : whole),
+  );
   return next === text ? text : expand(next, depth + 1);
 }
 
@@ -74,7 +96,7 @@ if (sectionStart === -1 || sectionEnd === -1) {
   ok('已定位快照文档中的提示词小节');
 
   for (const [name, raw] of constants) {
-    const full = expand(raw);
+    const full = expand(unescapeTemplate(raw));
     if (section.includes(full)) {
       ok(`★ ${name} 与代码逐字一致（${full.length} 字符）`);
     } else {
