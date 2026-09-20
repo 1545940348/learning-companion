@@ -15,6 +15,7 @@ import type {
   AnswerQuestionOutput,
   GenerateQuizInput,
   SupplementGapInput,
+  SupplementGapOutput,
 } from './tasks.js';
 import { validateAnswerBlocks } from './validate.js';
 import type { AllowedRef, ValidateOptions } from './validate.js';
@@ -29,7 +30,7 @@ export * from './symbolic.js';
 export interface TeachingModule {
   answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionOutput>;
   analyzeKnowledge(input: AnalyzeKnowledgeInput): Promise<AnalyzeKnowledgeOutput>;
-  supplementGap(input: SupplementGapInput): Promise<{ content: string }>;
+  supplementGap(input: SupplementGapInput): Promise<SupplementGapOutput>;
   generateQuizFromMaterial(input: GenerateQuizInput): Promise<QuizItem[]>;
   validateAnswerBlocks(
     blocks: AnswerBlock[],

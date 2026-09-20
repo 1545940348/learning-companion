@@ -29,6 +29,8 @@ import {
   SYSTEM_QUIZ_FROM_MATERIAL,
   SYSTEM_TUTOR,
 } from './prompt.js';
+import { normalizeClaims, verifyClaims } from './symbolic.js';
+import type { ClaimVerdict, MathClaim } from './symbolic.js';
 
 /* ==================== 模型输出的归一（V2.0：验证状态 + 图谱） ==================== */
 
@@ -284,10 +286,29 @@ export interface SupplementGapInput {
   materials: MaterialSlice[];
 }
 
+/**
+ * 缺口补充的结果。
+ *
+ * `verification` 由符号验证引擎（{@link ./symbolic.js}）给出，**不是**模型自称的：
+ * - `symbolic` —— 正文中的确定结论全部通过验证 → 调用方可把依赖状态推进到 `VERIFIED`
+ * - `failed`   —— 有结论被判错 → 调用方应转 `DISPUTED`，不得当作正确内容展示
+ * - `unverified` —— 没有可验证的结论，或模型没按结构返回 → 状态停在 `SUPPLEMENTED`
+ */
+export interface SupplementGapOutput {
+  /** 最小必要补充内容（200—400 字） */
+  content: string;
+  /** 正文中出现的结构化数学断言；为空表示"没有可验证的结论" */
+  claims: MathClaim[];
+  /** 符号验证的整体结论 */
+  verification: VerificationStatus;
+  /** 逐条判定，供排查与留痕（不面向学生） */
+  verdicts: readonly ClaimVerdict[];
+}
+
 export async function supplementGap(
   call: ModelCaller,
   input: SupplementGapInput,
-): Promise<{ content: string }> {
+): Promise<SupplementGapOutput> {
   const prompt = [
     `需要补齐的前置概念：${input.conceptName}（${input.conceptId}）`,
     `判定为缺口的理由：${input.reason}`,
@@ -296,8 +317,33 @@ export async function supplementGap(
     renderMaterials(input.materials),
   ].join('\n');
 
-  const raw = await call(prompt, { system: SYSTEM_GAP });
-  return { content: raw.trim() };
+  const raw = await call(prompt, { system: SYSTEM_GAP, json: true });
+
+  // 容错优先：模型没按 JSON 返回时，把整段输出当作正文、claims 置空 → 结论标 unverified。
+  // 宁可降级为「未验证」，也不能因为解析失败就丢掉学生要看的补充内容。
+  let content = raw.trim();
+  let claims: MathClaim[] = [];
+
+  try {
+    const parsed = extractJson(raw) as Record<string, unknown>;
+    const parsedContent = parsed.content;
+    if (typeof parsedContent === 'string' && parsedContent.trim().length > 0) {
+      content = parsedContent.trim();
+    }
+    // 结构不对的断言由 normalizeClaims 丢弃，不"修复"（见其注释）
+    claims = normalizeClaims(parsed.claims);
+  } catch {
+    // 保留 raw 作为 content；claims 为空即天然退回 unverified
+  }
+
+  const outcome = verifyClaims(claims);
+
+  return {
+    content,
+    claims,
+    verification: outcome.status,
+    verdicts: outcome.verdicts,
+  };
 }
 
 /* ============ 按材料出题 ============ */

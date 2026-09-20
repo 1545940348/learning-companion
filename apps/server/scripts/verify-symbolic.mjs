@@ -20,6 +20,7 @@
 import {
   FIXED_CASES,
   runFixedCases,
+  supplementGap,
   verifyClaims,
 } from '@lc/teaching';
 
@@ -175,6 +176,94 @@ console.log('\n7. 容差');
     tolerance: 0.001,
   });
   check('容差放宽到 1e-3 后判通过', loose.status === 'symbolic', loose.status);
+}
+
+/* ---------- 8. 接线：supplementGap 如何把断言变成验证状态 ---------- */
+console.log('\n8. 接线（supplementGap：模型输出 → 验证状态）');
+{
+  const input = {
+    conceptId: 'derivative',
+    conceptName: '导数',
+    reason: '材料未覆盖',
+    materials: [],
+  };
+
+  /** 造一个只返回固定字符串的假模型调用函数（不联网、不消耗额度） */
+  const fakeCall = (raw) => async () => raw;
+
+  // ① 模型按结构返回、结论正确 → symbolic
+  const good = await supplementGap(
+    fakeCall(
+      JSON.stringify({
+        content: '导数的定义是……',
+        claims: [{ kind: 'derivative', expr: 'x^2', at: 1, claimed: 2 }],
+      }),
+    ),
+    input,
+  );
+  check('★ 结论正确 → verification = symbolic', good.verification === 'symbolic', good.verification);
+  check('正文被正确取出', good.content.startsWith('导数的定义'), good.content);
+  check('断言被解析出 1 条', good.claims.length === 1, String(good.claims.length));
+
+  // ② 结论写错 → failed（"不许放水"的关键一条）
+  const bad = await supplementGap(
+    fakeCall(
+      JSON.stringify({
+        content: '导数的定义是……',
+        claims: [{ kind: 'derivative', expr: 'x^2', at: 1, claimed: 99 }],
+      }),
+    ),
+    input,
+  );
+  check('★ 结论写错 → verification = failed', bad.verification === 'failed', bad.verification);
+
+  // ③ 没有断言 → unverified（不得当成"验证通过"）
+  const none = await supplementGap(
+    fakeCall(JSON.stringify({ content: '纯文字说明', claims: [] })),
+    input,
+  );
+  check('★ 无可验证断言 → unverified', none.verification === 'unverified', none.verification);
+  check('此时断言数为 0', none.claims.length === 0, String(none.claims.length));
+
+  // ④ 模型没按 JSON 返回 → 正文保留、判 unverified（不因解析失败丢掉内容）
+  const plain = await supplementGap(fakeCall('导数的定义是：一个极限……'), input);
+  check('★ 非 JSON 输出：正文仍保留', plain.content.includes('一个极限'), plain.content);
+  check('★ 非 JSON 输出：判 unverified', plain.verification === 'unverified', plain.verification);
+
+  // ⑤ 结构畸形的断言被丢弃（不是"修复"）
+  const malformed = await supplementGap(
+    fakeCall(
+      JSON.stringify({
+        content: '说明',
+        claims: [
+          { kind: 'derivative', expr: 'x^2' },
+          { kind: 'monotonic', expr: 'x', claimed: { inc: [[5, 1]], dec: [] } },
+          { kind: 'nonsense', expr: 'x' },
+        ],
+      }),
+    ),
+    input,
+  );
+  check('★ 畸形断言被丢弃（不修复）', malformed.claims.length === 0, String(malformed.claims.length));
+  check('丢弃后判 unverified', malformed.verification === 'unverified', malformed.verification);
+
+  // ⑥ 用大数哨兵表示开区间（JSON 没有 Infinity）
+  const sentinel = await supplementGap(
+    fakeCall(
+      JSON.stringify({
+        content: 'x³−3x 的单调性……',
+        claims: [
+          {
+            kind: 'monotonic',
+            expr: 'x^3 - 3*x',
+            claimed: { inc: [[-1000000, -1], [1, 1000000]], dec: [[-1, 1]] },
+          },
+        ],
+      }),
+    ),
+    input,
+  );
+  check('★ 用 ±1000000 表示开区间也判通过', sentinel.verification === 'symbolic', sentinel.verification);
 }
 
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);

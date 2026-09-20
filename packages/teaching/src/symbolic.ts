@@ -131,10 +131,32 @@ const INFINITY_WINDOW = 20;
 
 /* ==================== 内部工具 ==================== */
 
-/** 把可能为 ±Infinity 的端点换成可取的有限值 */
+/**
+ * 该端点是否为**开端点**（不做「分界点 f'=0」校验）。
+ *
+ * 两种来源都算开端点：
+ * - 直接传 `±Infinity`（本模块内部构造断言时用）；
+ * - 传一个绝对值很大的哨兵（如 `1e6`）—— **JSON 无法表达 `±Infinity`**，
+ *   模型经接口返回断言时只能用大数代替。
+ *   若不认这种写法，分界点校验会在 x=−1e6 处算得 f'≠0，
+ *   从而**把一条正确的断言误判为「验证未通过」**。
+ */
+function isOpenBound(value: number): boolean {
+  return !Number.isFinite(value) || Math.abs(value) >= INFINITY_WINDOW;
+}
+
+/**
+ * 把端点收敛到可采样的有限窗口内。
+ *
+ * 对开端点做**收敛**而非报错：这样采样点落在 `±INFINITY_WINDOW` 内，
+ * 也就是课程范围内真正有意义的区域。若真按 `1e6` 展开，
+ * 样本点会落在远离原点的位置，几乎必然得出与实际相反的判断。
+ */
 function finiteBound(value: number): number {
-  if (value === Infinity) return INFINITY_WINDOW;
-  if (value === -Infinity) return -INFINITY_WINDOW;
+  if (Number.isNaN(value)) return value;
+  if (!Number.isFinite(value)) return value > 0 ? INFINITY_WINDOW : -INFINITY_WINDOW;
+  if (value > INFINITY_WINDOW) return INFINITY_WINDOW;
+  if (value < -INFINITY_WINDOW) return -INFINITY_WINDOW;
   return value;
 }
 
@@ -310,9 +332,10 @@ function verifyMonotonic(
       }
     }
 
-    // 分界点：有限端点处 f' 应当为 0
+    // 分界点：**闭合**端点处 f' 应当为 0。
+    // 开端点跳过 —— 含 `±Infinity` 与模型用大数哨兵表达的开区间（见 isOpenBound）。
     for (const edge of [range[0], range[1]]) {
-      if (!Number.isFinite(edge)) continue;
+      if (isOpenBound(edge)) continue;
       const value = derivativeAt(claim.expr, edge);
       if (value === null) return `分界点 x=${edge} 处 f' 无法求值`;
       if (Math.abs(value) > 1e-6) {
@@ -452,6 +475,89 @@ export function verifyClaims(
     verdicts,
     durationMs: Date.now() - startedAt,
   };
+}
+
+/* ==================== 断言归一化（解析模型返回的 JSON 用） ==================== */
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** 区间两元组：允许 ±Infinity 与大数哨兵，但拒绝 NaN 与左右颠倒 */
+function asInterval(value: unknown): readonly [number, number] | null {
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const [start, end] = value as [unknown, unknown];
+  if (typeof start !== 'number' || typeof end !== 'number') return null;
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  if (end <= start) return null;
+  return [start, end];
+}
+
+/**
+ * 把模型返回的原始 JSON 归一化成受信任的 {@link MathClaim} 列表。
+ *
+ * **不信任模型的结构**：形状不对、数值非有限、区间左右颠倒的条目**一律丢弃**，
+ * 而不是"尽力修复"。
+ *
+ * 理由：丢弃只会让验证退回 `unverified`（诚实，状态停在 `SUPPLEMENTED`）；
+ * 而"修复"有可能把一个错的断言修成看起来能通过的样子 —— 那是不诚实。
+ */
+export function normalizeClaims(raw: unknown): MathClaim[] {
+  if (!Array.isArray(raw)) return [];
+  const claims: MathClaim[] = [];
+
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const record = item as Record<string, unknown>;
+
+    switch (record.kind) {
+      case 'derivative': {
+        if (typeof record.expr !== 'string') break;
+        if (!isFiniteNumber(record.at) || !isFiniteNumber(record.claimed)) break;
+        claims.push({ kind: 'derivative', expr: record.expr, at: record.at, claimed: record.claimed });
+        break;
+      }
+      case 'tangent': {
+        if (typeof record.expr !== 'string' || typeof record.claimed !== 'string') break;
+        if (!isFiniteNumber(record.at)) break;
+        claims.push({ kind: 'tangent', expr: record.expr, at: record.at, claimed: record.claimed });
+        break;
+      }
+      case 'extremum': {
+        if (typeof record.expr !== 'string') break;
+        const points = (Array.isArray(record.claimed) ? record.claimed : []).filter(isFiniteNumber);
+        if (points.length === 0) break;
+        claims.push({ kind: 'extremum', expr: record.expr, claimed: points });
+        break;
+      }
+      case 'monotonic': {
+        if (typeof record.expr !== 'string') break;
+        const claimed = record.claimed;
+        if (typeof claimed !== 'object' || claimed === null) break;
+        const { inc, dec } = claimed as Record<string, unknown>;
+
+        const incRanges: [number, number][] = [];
+        for (const entry of Array.isArray(inc) ? inc : []) {
+          const range = asInterval(entry);
+          if (range) incRanges.push([range[0], range[1]]);
+        }
+        const decRanges: [number, number][] = [];
+        for (const entry of Array.isArray(dec) ? dec : []) {
+          const range = asInterval(entry);
+          if (range) decRanges.push([range[0], range[1]]);
+        }
+        if (incRanges.length === 0 && decRanges.length === 0) break;
+
+        claims.push({ kind: 'monotonic', expr: record.expr, claimed: { inc: incRanges, dec: decRanges } });
+        break;
+      }
+      default:
+        // 未知类型一律丢弃
+        break;
+    }
+  }
+
+  return claims;
 }
 
 /* ==================== 固定案例基线 ==================== */

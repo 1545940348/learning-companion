@@ -36,6 +36,7 @@ import type {
   KnowledgeResponse,
   Material,
   ParseResponse,
+  PrerequisiteStatus,
   ProfileResponse,
   QuizResponse,
   Session,
@@ -49,6 +50,7 @@ import {
   MATERIAL_LIMITS,
   MATERIAL_QUIZ_PER_TOPIC,
   MAX_VOICE_SECONDS,
+  VERIFYING_STATUSES,
 } from '@lc/contracts';
 import { env } from '../config/env.js';
 import { describeBuild } from '../config/build-info.js';
@@ -95,12 +97,15 @@ const adapter = createModelAdapter();
 /**
  * 符号验证引擎状态（V2.0 §5.2 要求 `/api/health` 如实报告）。
  *
- * ⚠️ `available` 当前固定为 `false`：引擎已选型（`mathjs`，见
- * `docs/tech/2026-09-17-符号验证引擎选型-纯TS.md`），但 `packages/teaching/src/symbolic.ts`
- * 尚未实现（B1）。**在实现落地前不得改为 true** —— health 说"验证可用"而实际没有，
- * 会让评审与前端都判断错。
+ * `available: true` —— 引擎已落地 **且已接进做题流程**：
+ * - `packages/teaching/src/symbolic.ts` 已实现（`verify:symbolic` 37 项回归）；
+ * - `/api/gap` 会用验证结果决定依赖状态（`VERIFIED` / `DISPUTED` / 停在 `SUPPLEMENTED`），
+ *   见本文件下方 `gap.verification` 那段。
+ *
+ * ⚠️ 这个 `true` 的依据是"接进流程、会影响学生看到的结论"，**不是"模块写完了"** ——
+ * 若哪天把接线回退掉，这里必须同步改回 `false`，否则 health 会虚报能力。
  */
-const VERIFICATION_ENGINE: VerificationEngineStatus = { engine: 'mathjs', available: false };
+const VERIFICATION_ENGINE: VerificationEngineStatus = { engine: 'mathjs', available: true };
 
 /**
  * 为**单次业务请求**创建教学模块实例，并挂上 60 秒总预算（说明书 V1.4）。
@@ -452,21 +457,42 @@ apiRouter.post(
       return;
     }
 
-    const { content } = await teaching.supplementGap({
+    const gapResult = await teaching.supplementGap({
       conceptId,
       conceptName: conceptId,
       reason,
       materials: toSlices(session),
     });
 
-    /**
-     * 补充内容的验证状态。
+    const { content, verification, claims, verdicts } = gapResult;
+
+    /*
+     * 依赖状态的推进规则（说明书 §3.2 六态、§4.4）：
+     *   symbolic / human → VERIFIED（已符号验证或人工核验）
+     *   failed           → DISPUTED（验证未通过，需人工介入）
+     *   其余（无可验证断言、验证超时）→ 停在 SUPPLEMENTED
      *
-     * ⚠️ 在 B1（符号验证）落地前**只能**是 `unverified`，且状态停在 `SUPPLEMENTED`，
-     * 不得直接跳到 `VERIFIED` —— §4.2 规定"补充内容必须经过符号验证或标记为未验证，
-     * 不得默认视为正确"。
+     * ⚠️ `unverified` 时**不得**推进到 VERIFIED —— §4.2 规定补充内容必须经过
+     * 符号验证或明确标记为未验证，不得默认视为正确。
+     * 这条是本轮接线的核心：状态不再写死，而是由**验证结果**决定。
      */
-    const verification: VerificationStatus = DEFAULT_VERIFICATION;
+    const nextStatus: PrerequisiteStatus = VERIFYING_STATUSES.includes(verification)
+      ? 'VERIFIED'
+      : verification === 'failed'
+        ? 'DISPUTED'
+        : 'SUPPLEMENTED';
+
+    logger.info('gap.verification', {
+      conceptId,
+      verification,
+      claimCount: claims.length,
+      nextStatus,
+      // 判定说明只进日志、供排查，不面向学生
+      failedReasons: verdicts
+        .filter((verdict) => verdict.status === 'failed')
+        .map((verdict) => verdict.detail)
+        .slice(0, 3),
+    });
 
     const supplement: SupplementBlock = {
       id: randomUUID(),
@@ -477,12 +503,12 @@ apiRouter.post(
       verification,
     };
     // 复核版本后一次性提交：并发旧响应不得覆盖新状态
-    const updated = commitSupplement(session.id, supplement, baseVersion, 'SUPPLEMENTED');
+    const updated = commitSupplement(session.id, supplement, baseVersion, nextStatus);
 
     const response: GapResponse = {
       content,
       supplementBlockId: supplement.id,
-      status: 'SUPPLEMENTED',
+      status: nextStatus,
       verification,
       materialVersion: updated.materialVersion,
     };
