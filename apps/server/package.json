@@ -16,6 +16,7 @@
     "verify:errors": "tsx scripts/verify-error-mapping.mjs",
     "verify:guards": "tsx scripts/verify-guards-and-errors.mjs",
     "verify:graph": "tsx scripts/verify-graph-and-profile.mjs",
+    "verify:symbolic": "tsx scripts/verify-symbolic.mjs",
     "verify:serve-web": "tsx scripts/verify-serve-web.mjs",
     "verify:dist": "node scripts/verify-dist.mjs",
     "verify:flow": "tsx scripts/verify-ui-flow.mjs",

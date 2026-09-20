@@ -250,10 +250,10 @@ docs/
 | `@types/express` | ^5.0.0 | Express 类型定义 | MIT |
 | `@types/node` | ^22.10.0 | Node 类型定义 | MIT |
 | `@types/react` / `@types/react-dom` | ^19.0.0 | React 类型定义 | MIT |
-| `mathjs` | ^15.2.0（**计划引入**） | 符号验证引擎（求导、化简、求值） | Apache-2.0 |
+| `mathjs` | ^15.2.0 | 符号验证引擎（求导、化简、求值）；用于 `packages/teaching/src/symbolic.ts` | Apache-2.0 |
 
-> `mathjs` 尚未安装：选型已定（见 `docs/tech/2026-09-17-符号验证引擎选型-纯TS.md`），
-> 由 B 在实现 `packages/teaching/src/symbolic.ts` 时一并声明。
+> `mathjs` 为**运行时依赖**，已声明在 `packages/teaching/package.json`，并已实际安装。
+> 选型依据见 `docs/tech/2026-09-17-符号验证引擎选型-纯TS.md`；回归见 `npm run verify:symbolic`。
 
 > ⚠️ **本轮修正**：`concurrently` 此前被根 `npm run dev` 使用却**从未声明** ——
 > 本机装了能跑，**别人 clone 下来 `npm run dev` 会直接失败**（违反补充说明 §5.2「他人可照着跑起来」）。
