@@ -23,7 +23,7 @@ import type {
   VerificationStatus,
   PrerequisiteStatus,
 } from '@lc/contracts';
-import { DEFAULT_VERIFICATION, MATERIAL_LIMITS } from '@lc/contracts';
+import { DEFAULT_VERIFICATION, MATERIAL_LIMITS, VERIFYING_STATUSES } from '@lc/contracts';
 
 const sessions = new Map<string, Session>();
 const profiles = new Map<string, LearnerProfile>();
@@ -238,6 +238,26 @@ export function commitSupplement(
   assertVersionUnchanged(session, expectedVersion);
 
   const verification: VerificationStatus = supplement.verification ?? DEFAULT_VERIFICATION;
+
+  /*
+   * `I18` 一致性断言（§3.4 的硬规则，此前只写在文档与类型注释里、**没有机械检查**）：
+   * 「`SUPPLEMENTED → VERIFIED` 仅当验证状态为 `symbolic` 或 `human`」。
+   *
+   * 调用方若传 `status = 'VERIFIED'` 而验证状态不达标 → **直接拒绝**，不静默降级：
+   * 一个手滑的调用点就能把未验证内容写成「已验证」，而"不把未验证内容说成已验证"
+   * 是本项目的真实性底座（§4.2）。宁可抛错暴露，也不要悄悄写进去。
+   *
+   * ⚠️ **未对 `DISPUTED` 加同类断言**：§3.2 对 DISPUTED 的定义是
+   * 「验证失败**或来源冲突**」—— 来源冲突未必伴随 `failed`，
+   * 断言写成"只有 failed 才能 DISPUTED"会挡住合法路径。
+   * 只把**规则原文明确**的那一条焊死。
+   */
+  if (status === 'VERIFIED' && !VERIFYING_STATUSES.includes(verification)) {
+    throw new Error(
+      `commitSupplement: 验证状态 "${verification}" 不足以把前置关系标为 VERIFIED（需 ${VERIFYING_STATUSES.join(' 或 ')}）`,
+    );
+  }
+
   const next: Session = {
     ...session,
     supplements: [...session.supplements, supplement as Session['supplements'][number]],

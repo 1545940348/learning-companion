@@ -90,6 +90,19 @@ const gapReason = knowledge.prerequisites[0].reason;
 /* 3. 读取图谱（对应图谱面板） */
 const graph = (await call('GET', `/api/graph?sessionId=${session.id}`)).json;
 check('③ GET /api/graph → 能读到刚落盘的节点', graph.nodes.length === knowledge.graph.nodes.length);
+/*
+ * `I1`（卡 0-4）：**关系边必须真的走通"产出 → 落盘 → 读回"**。
+ *
+ * 此前 mock 不产出 `edges`，所以这条路径是空的；也正因为空，
+ * 后面 ⑦ 那条 `graphAfter.edges.length === 0 || …` 的写法会**恒真**
+ * （这正是本项目吃过亏的"判据失去分辨力"）。
+ * 这里补上正面路径：读回来的边数 = 落盘的边数，且**确实 > 0**。
+ */
+check(
+  '③ GET /api/graph → 关系边也读得回（I1 落地前这里恒为 0 条）',
+  graph.edges.length > 0 && graph.edges.length === knowledge.graph.edges.length,
+  graph.edges.map((item) => `${item.from}->${item.to}`).join(', '),
+);
 
 /* 4. 答疑（材料路径，带正确版本） */
 const tutor = (
@@ -123,18 +136,34 @@ const gap = (
     reason: gapReason,
   })
 ).json;
-check('⑥ 补充成功 → 状态 SUPPLEMENTED', gap.status === 'SUPPLEMENTED', gap.status);
-check('⑥ 验证状态为 unverified（符号引擎未接入）', gap.verification === 'unverified', gap.verification);
+/*
+ * `B3` 落地后（2026-09-20）：mock 的补充内容带与说明书 §7.1 一致的 `claims`，
+ * 于是状态**真的**走到 `VERIFIED` —— 这就是 `P-B2` 要求的
+ * `MISSING → SUPPLEMENTED → VERIFIED` 可达性，端到端跑通。
+ *
+ * ⚠️ 这三条在 `B3` 之前写的是 `SUPPLEMENTED` / `unverified`。那种写法编码的是
+ * "引擎还没做"的旧状态，不是能力本身 —— 引擎一接上它们必然变红。
+ * 改的是**期望值**（跟着真实行为走），不是放宽判据。
+ */
+check('⑥ 补充成功 → 状态 VERIFIED（claims 通过符号校验）', gap.status === 'VERIFIED', gap.status);
+check('⑥ 验证状态为 symbolic（符号引擎已接入，B3）', gap.verification === 'symbolic', gap.verification);
 check('⑥ 版本递增到 2', gap.materialVersion === 2);
 check('⑥ 返回补充块 ID', typeof gap.supplementBlockId === 'string');
 check('⑥ 补充内容明显是一段说明（非空）', gap.content.length > 50, gap.content?.length);
+// `I18`：`SUPPLEMENT_LENGTH`（200—400 字，按非空白字符计）已接线
+const gapLength = Array.from(gap.content).filter((char) => !/\s/.test(char)).length;
+check(
+  '⑥ 补充长度落在 SUPPLEMENT_LENGTH 区间内（I18 接线）',
+  gapLength >= 200 && gapLength <= 400,
+  `${gapLength} 字`,
+);
 
-/* 7. 补充后图谱的入边应转为 SUPPLEMENTED */
+/* 7. 补充后图谱的入边应转为 VERIFIED（与 gap.status 同一个口径） */
 const graphAfter = (await call('GET', `/api/graph?sessionId=${session.id}`)).json;
 const touched = graphAfter.edges.filter((e) => e.to === gapConcept);
 check(
-  '⑦ 图谱入边已转 SUPPLEMENTED（若模型给出了边）',
-  graphAfter.edges.length === 0 || touched.every((e) => e.status === 'SUPPLEMENTED'),
+  '⑦ 图谱入边已转 VERIFIED',
+  graphAfter.edges.length === 0 || touched.every((e) => e.status === 'VERIFIED'),
   graphAfter.edges.map((e) => `${e.to}:${e.status}`),
 );
 check('⑦ 图谱节点未被增删', graphAfter.nodes.length === knowledge.graph.nodes.length);
@@ -149,6 +178,12 @@ const again = (
   })
 ).json;
 check('⑧ 重复补充返回同一补充块（幂等，避免无谓消耗）', again.supplementBlockId === gap.supplementBlockId);
+/*
+ * `I16`：重放的**状态**必须从图谱实况读。原先那条路径硬编码 `status: 'SUPPLEMENTED'` ——
+ * 概念已经是 `VERIFIED` 时却回"已补充"，是低报（也自相矛盾）。
+ */
+check('⑧ 重放状态仍为 VERIFIED（I16：不再硬编码 SUPPLEMENTED）', again.status === 'VERIFIED', again.status);
+check('⑧ 重放验证状态仍为 symbolic', again.verification === 'symbolic', again.verification);
 
 /* 9. 练习：固定题 + 按材料出题 */
 const fixed = (await call('POST', '/api/quiz', { topic: 'monotonicity', source: 'fixed' })).json;

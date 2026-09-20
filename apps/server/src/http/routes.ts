@@ -22,7 +22,9 @@ import { Router } from 'express';
 import type { Request, RequestHandler, Response } from 'express';
 import {
   FIXED_QUIZ,
+  SYMBOLIC_ENGINE,
   createTeachingModule,
+  verifySupplementContent,
   type AllowedRef,
   type MaterialSlice,
   type TeachingModule,
@@ -36,6 +38,7 @@ import type {
   KnowledgeResponse,
   Material,
   ParseResponse,
+  PrerequisiteStatus,
   ProfileResponse,
   QuizResponse,
   Session,
@@ -49,6 +52,7 @@ import {
   MATERIAL_LIMITS,
   MATERIAL_QUIZ_PER_TOPIC,
   MAX_VOICE_SECONDS,
+  VERIFYING_STATUSES,
 } from '@lc/contracts';
 import { env } from '../config/env.js';
 import { describeBuild, describeVersion } from '../config/build-info.js';
@@ -95,12 +99,15 @@ const adapter = createModelAdapter();
 /**
  * 符号验证引擎状态（V2.0 §5.2 要求 `/api/health` 如实报告）。
  *
- * ⚠️ `available` 当前固定为 `false`：引擎已选型（`mathjs`，见
- * `docs/tech/2026-09-17-符号验证引擎选型-纯TS.md`），但 `packages/teaching/src/symbolic.ts`
- * 尚未实现（B1）。**在实现落地前不得改为 true** —— health 说"验证可用"而实际没有，
- * 会让评审与前端都判断错。
+ * `B3` 已落地（2026-09-20）：引擎 = `mathjs`，实现在 `packages/teaching/src/symbolic.ts`。
+ * 因此这里**由引擎自己的声明推导**，不再手写 `false` ——
+ * 原先那句"**在实现落地前不得改为 true**"的红线已经满足（落地了就必须改），
+ * 而"手写常量"这种写法本身就会漂移：引擎若被摘掉，health 还会说可用。
  */
-const VERIFICATION_ENGINE: VerificationEngineStatus = { engine: 'mathjs', available: false };
+const VERIFICATION_ENGINE: VerificationEngineStatus = {
+  engine: SYMBOLIC_ENGINE.name,
+  available: SYMBOLIC_ENGINE.available,
+};
 
 /**
  * 为**单次业务请求**创建教学模块实例，并挂上 60 秒总预算（说明书 V1.4）。
@@ -468,6 +475,54 @@ apiRouter.post(
 
 /* ==================== POST /api/gap ==================== */
 
+/**
+ * 由验证状态推导六态里的状态 —— §3.4 的硬规则。
+ *
+ * `VERIFYING_STATUSES`（`symbolic` / `human`）是"通过"的**唯一依据**。
+ * 这个常量在契约里定义了却一直零引用（`I18`："规则声明了却没接线"），这里把它接上：
+ * 以后判定口径只有一个来源，不会再出现"某处自己写死一个字符串"的分叉。
+ */
+function deriveSupplementStatus(verification: VerificationStatus): PrerequisiteStatus {
+  if (verification === 'failed') return 'DISPUTED';
+  return VERIFYING_STATUSES.includes(verification) ? 'VERIFIED' : 'SUPPLEMENTED';
+}
+
+/**
+ * 从图谱**入边**读该概念的实际状态（用于 `/api/gap` 的幂等重放，`I16`）。
+ *
+ * 原先重放分支硬编码 `status: 'SUPPLEMENTED'` —— 概念早已 `VERIFIED` 时却回"已补充"，
+ * 是**低报**，也是错的。
+ *
+ * 返回 `null` 表示**读不到**：要么该概念没有入边，要么多条入边状态互相矛盾
+ * —— 这时由调用方改用"按已有补充块的验证状态推导"，**不猜**。
+ */
+function readConceptStatus(session: Session, conceptId: string): PrerequisiteStatus | null {
+  const statuses = [
+    ...new Set(
+      session.graph.edges.filter((edge) => edge.to === conceptId).map((edge) => edge.status),
+    ),
+  ];
+  return statuses.length === 1 ? (statuses[0] as PrerequisiteStatus) : null;
+}
+
+/**
+ * 从图谱节点反查概念的**中文名**（`I15`）。
+ *
+ * 原先 `/api/gap` 传的是 `conceptName: conceptId`，于是真实模型看到的是
+ * `kp-derivative（kp-derivative）` —— 把内部编号当名字用。
+ *
+ * ⚠️ **现管线里这个反查通常查不到**：图谱节点只由 `points[]`（材料抽出的知识点）构成，
+ * 而这里要补的是 `prerequisites[]` 里的前置概念 —— 两者不是同一批 id（详见 `I34`/`I42`）。
+ * 因此**如实退回 `conceptId`**：宁可让模型看到编号，也不编一个名字出来。
+ */
+function findConceptName(session: Session, conceptId: string): string | null {
+  const node = session.graph.nodes.find((item) => item.id === conceptId);
+  if (!node) return null;
+  const name = node.name.trim();
+  // `name` 缺省时会被归一成 id 本身，那不算"查到了名字"
+  return name.length > 0 && name !== node.id ? name : null;
+}
+
 apiRouter.post(
   '/gap',
   asyncHandler(async (req, res) => {
@@ -490,33 +545,48 @@ apiRouter.post(
     );
     if (existing) {
       // 幂等：同一缺口重复补充时直接返回已有内容，避免无谓消耗
+      const existingVerification = existing.verification ?? DEFAULT_VERIFICATION;
       const response: GapResponse = {
         content: existing.content,
         supplementBlockId: existing.id,
-        status: 'SUPPLEMENTED',
+        /*
+         * `I16`：状态从**图谱实况**读，不再硬编码 `'SUPPLEMENTED'`。
+         * 读不到（无边／矛盾）才退回"按已有补充块的验证状态推导"。
+         */
+        status:
+          readConceptStatus(session, conceptId) ?? deriveSupplementStatus(existingVerification),
         // 已有补充块若当时未通过验证，重放时也必须如实说「未验证」（§4.2）
-        verification: existing.verification ?? DEFAULT_VERIFICATION,
+        verification: existingVerification,
         materialVersion: session.materialVersion,
       };
       res.json(response);
       return;
     }
 
-    const { content } = await teaching.supplementGap({
+    /*
+     * `I15`：把**概念名**送进提示词。反查不到就退回 `conceptId`（见 `findConceptName` 的说明），
+     * 不再把编号当名字用。
+     */
+    const conceptName = findConceptName(session, conceptId) ?? conceptId;
+
+    const { content, claims } = await teaching.supplementGap({
       conceptId,
-      conceptName: conceptId,
+      conceptName,
       reason,
       materials: toSlices(session),
     });
 
-    /**
-     * 补充内容的验证状态。
+    /*
+     * `B3`：验证状态由**符号引擎**给出（`packages/teaching/src/symbolic.ts`），不再固定 `unverified`。
      *
-     * ⚠️ 在 B1（符号验证）落地前**只能**是 `unverified`，且状态停在 `SUPPLEMENTED`，
-     * 不得直接跳到 `VERIFIED` —— §4.2 规定"补充内容必须经过符号验证或标记为未验证，
-     * 不得默认视为正确"。
+     * 判据：模型的 `claims` 逐条核验 —— 全过 → `symbolic`；任一不过 → `failed`；
+     * 没有断言 / 表达式转不了 / 超出规模上限 → `unverified`（**"没有断言"不等于"通过"**）。
+     * 另外补上长度核对：`SUPPLEMENT_LENGTH`（200—400 字）超区间的内容照常返回，
+     * 但**不据此标"已符号验证"**。
      */
-    const verification: VerificationStatus = DEFAULT_VERIFICATION;
+    const verificationReport = verifySupplementContent({ content, claims });
+    const verification: VerificationStatus = verificationReport.status;
+    const status = deriveSupplementStatus(verification);
 
     const supplement: SupplementBlock = {
       id: randomUUID(),
@@ -527,12 +597,12 @@ apiRouter.post(
       verification,
     };
     // 复核版本后一次性提交：并发旧响应不得覆盖新状态
-    const updated = commitSupplement(session.id, supplement, baseVersion, 'SUPPLEMENTED');
+    const updated = commitSupplement(session.id, supplement, baseVersion, status);
 
     const response: GapResponse = {
       content,
       supplementBlockId: supplement.id,
-      status: 'SUPPLEMENTED',
+      status,
       verification,
       materialVersion: updated.materialVersion,
     };

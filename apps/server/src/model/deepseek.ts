@@ -34,7 +34,9 @@ import type { ModelErrorCode } from '@lc/contracts';
 import { env } from '../config/env.js';
 import { logger } from '../logger.js';
 import { ModelError, redact } from './errors.js';
-import type { ModelAdapter } from './index.js';
+// `I38`：类型契约下沉到叶子模块 `./adapter.js`，不再反向 import `./index.js`
+// （那样会与 `index.ts → deepseek.ts` 构成环）。
+import type { ModelAdapter } from './adapter.js';
 
 /**
  * JSON 输出要求，注入提示词。

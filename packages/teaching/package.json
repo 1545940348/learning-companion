@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@lc/contracts": "*"
+    "@lc/contracts": "*",
+    "mathjs": "^15.2.0"
   }
 }

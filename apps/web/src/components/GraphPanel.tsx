@@ -3,9 +3,12 @@
  *
  * 只读，不提供图形编辑器（§3.6）。
  *
- * ⚠️ **如实呈现数据现状**：图谱的边由教学模块产出，在其提示词补齐之前
- * `edges` 为空 —— 此时界面明确说明"只有节点、没有关系边"，
- * 而不是画一张看起来有结构、实际是前端臆造的图（§9）。
+ * ⚠️ **如实呈现数据现状**（`I1` 已把"提示词要求显式 `edges`"补上，mock 通道也已产出边）：
+ * - `edges` 为空 → 界面明确说明"只有节点、没有关系边"；
+ * - 有边、但**边的端点不是节点**（典型情况：前置缺口概念尚未从材料中抽为节点，
+ *   如 `kp-monotonicity → kp-derivative` 里的 `kp-derivative`）→ 界面明确说明
+ *   "有 N 条关系未画出连线"及原因。
+ * 两者都**不**画一张看起来有结构、实际是前端臆造的图（§9），也**不静默丢边**。
  *
  * ⚠️ **节点状态同样要如实**（`I20①`）：本会话没有覆盖判定记录的节点标「未判定」，
  * **不得默认显示「材料已覆盖」** —— 那是一个系统从未做出的判定。
@@ -78,6 +81,15 @@ export function GraphPanel({ wb }: Props) {
   const nodes = graph?.nodes ?? [];
   const edges = graph?.edges ?? [];
   const hasEdges = edges.length > 0;
+  /*
+   * 端点不是节点的边画不出来（SVG 的 `<path>` 需要两端坐标）。
+   * **不静默丢边**（`I1` 落地后新增的数据形态）：契约里 `to` 是"被依赖的前置概念"，
+   * 它可以是材料未覆盖、尚未被抽为节点的概念（正是演示案例里的导数缺口）。
+   * 原先这种边被 `position.get()` 取空后悄悄 `return null` —— 头部显示"N 关系"却一条线都没有，
+   * 看的人只会以为界面坏了。改为如实报出条数。
+   */
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const dangling = edges.filter((edge) => !nodeIds.has(edge.from) || !nodeIds.has(edge.to)).length;
   const undetermined = nodes.filter((node) => nodeStatus(node.id, wb.gaps, wb.knowledge) === null).length;
 
   // 布局：按"被依赖的深度"分层。没有边时全部落在第一层，排成一行。
@@ -146,6 +158,13 @@ export function GraphPanel({ wb }: Props) {
             <p className="warn-inline">
               当前图谱只有节点、没有关系边：关系抽取尚未产出显式的 <code>from → to</code> 依赖，
               界面不会凭空连线。前置缺口请看上方「前置依赖」区。
+            </p>
+          )}
+
+          {dangling > 0 && (
+            <p className="hint-inline">
+              另有 {dangling} 条关系指向尚未抽取为节点的概念（通常是材料未覆盖的前置缺口），
+              因此这里画不出连线；这些概念在上方「前置依赖」区可见。
             </p>
           )}
 

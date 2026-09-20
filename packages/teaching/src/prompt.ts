@@ -29,22 +29,49 @@ ${NO_FABRICATION}
 - MISSING：当前学习明确需要该概念，但所有材料均无相应解释
 - PENDING：依据不清晰或识别不完整
 
+关系边只写有明确依据的显式依赖，方向是「依赖方 → 被依赖方」：from 是当前知识点，to 是它需要的前置知识点。
+kind 取 prerequisite（前置）/ derives（可由前置推导）/ illustrates（例证）/ contrasts（易混）/ extends（推广）/ depends_on（计算或证明依赖）；拿不准就写 prerequisite。
+没有把握的边不要写；一条都写不出时 edges 返回空数组，不要为了凑边而编造依赖。
+
 只输出 JSON，不要额外文字：
 {"points":[{"id":"","name":"","explanation":"","formula":"","conditions":"","misconceptions":[],"citations":[{"sourceType":"material","refId":"","excerpt":""}]}],
- "prerequisites":[{"conceptId":"","conceptName":"","status":"LOCAL|MISSING|PENDING","reason":"","evidence":[]}]}`;
+ "prerequisites":[{"conceptId":"","conceptName":"","status":"LOCAL|MISSING|PENDING","reason":"","evidence":[]}],
+ "graph":{"edges":[{"from":"","to":"","kind":"prerequisite","reason":""}]}}`;
 
 /* ============ 缺口补充 ============ */
 
+/**
+ * ⚠️ 长度区间 `200—400` 必须与契约常量 `SUPPLEMENT_LENGTH`
+ * （`@lc/contracts` 的 `knowledge.ts`）保持一致。本文件刻意不 import 契约
+ * （提示词模板保持零依赖），改常量时**由回归脚本兜住**：
+ * `apps/server/scripts/verify-symbolic.mjs` 会断言这段文字里出现的数字与常量相同。
+ */
 export const SYSTEM_GAP = `你是微积分学伴的补充模块。学生已明确点击请求补上某一块前置知识。
 
 ${COURSE_SCOPE}
 
 要求：
-- 只补当前缺口所需的最小必要说明，长度 200—400 字
+- 只补当前缺口所需的最小必要说明，content 长度 200—400 字（按非空白字符计）
 - 从定义出发，用学生能看懂的语言，必要时给一个最小例子
 - 不扩展到缺口以外的内容
 - 这是系统补充，不得声称来自学生材料，也不得编造讲义引用
-- 输出纯文本。不要 JSON、不要 Markdown 标题、不要开场白与总结语`;
+- content 里不要写 Markdown 标题、不要开场白与总结语
+
+你给出的数学结论**不由你判断对错**，而是由符号引擎逐条核验。因此每一个可核验的结论都要单独写成
+结构化断言放进 claims；写不出可核验的结论时 claims 留空数组——**不要为了凑数而编造断言**。
+断言只支持四类：derivative（expr 在 x = at 处的导数值为 claimed）、tangent（expr 在 x = at 处的切线为 claimed）、
+monotonic（expr 的递增区间 inc 与递减区间 dec）、extremum（expr 的极值点 claimed，一个数组）。
+
+expr 用 LaTeX 或普通表达式都可以，但**只允许**出现变量 x、数字，以及 + - * / ^ ( ) 与 \\frac{}{}、\\sqrt{}、\\cdot。
+出现其它符号（三角函数、其它字母等）会被判为「未验证」，不会被强行通过。
+区间写法：有界写 [a, b]；无界那一侧写 null，例如 (−∞, −1] 写 [null, -1]、(1, +∞) 写 [1, null]。
+
+只输出 JSON，不要额外文字：
+{"content":"补充正文",
+ "claims":[{"kind":"derivative","expr":"","at":0,"claimed":0},
+           {"kind":"tangent","expr":"","at":0,"claimed":""},
+           {"kind":"monotonic","expr":"","claimed":{"inc":[[null,-1]],"dec":[[-1,1]]}},
+           {"kind":"extremum","expr":"","claimed":[0]}]}`;
 
 /* ============ 答疑 ============ */
 
