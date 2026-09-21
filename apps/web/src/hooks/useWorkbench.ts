@@ -30,6 +30,7 @@ import type {
 import { MATERIAL_LIMITS } from '@lc/contracts';
 import { ApiError, RequestAbortedError, api, cancelInFlightRequests, describeAbort } from '../api';
 import { clearProgress, loadProgress, saveProgress } from '../shared/lib/persist';
+import { readImageFile } from '../shared/lib/image-input';
 
 /**
  * 界面上的一份材料。
@@ -138,6 +139,13 @@ export interface WorkbenchActions {
    * §5.4 要求失败时保留学生的输入，成功才清。
    */
   submitMaterials: (texts: string[]) => Promise<boolean>;
+  /**
+   * 上传一张图片作为材料（视觉入口）。
+   *
+   * 文本由**服务端**从图片识别得到，识别完走与文字材料**完全相同**的下游管道。
+   * 返回是否成功，语义与 `submitMaterials` 一致。
+   */
+  submitImage: (file: File) => Promise<boolean>;
   /** 就地纠错：把某份材料改成新文本并重建（用例 E12） */
   correctMaterial: (materialId: string, text: string) => Promise<void>;
   /** 一键补充缺口（§2.3） */
@@ -459,6 +467,45 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
 
   /* ---------- 材料提交 / 图谱重建（§2.2、§2.4） ---------- */
 
+  /**
+   * 材料入库：调 `/api/knowledge`，并把返回的图谱 / 版本 / 材料同步进界面状态。
+   *
+   * **纯提取**（2026-09-21，自 `submitMaterials` 原样搬出，**行为不变**）：
+   * 文字材料与**图片材料**（视觉接入后新增的入口）走的是**同一条下游管道**，
+   * 两处各写一遍必然漂移 —— 那正是 `I14`「两套事实」的成因。
+   * 因此只保留这一份，两个入口都调它；`submitMaterials` 只是少了一段内联代码。
+   */
+  const commitMaterialsToSession = useCallback(
+    async (id: string, incoming: Material[], versionAtRequest: number): Promise<boolean> => {
+      const result = await api.knowledge({ sessionId: id, materials: incoming });
+      if (!stillCurrent(versionAtRequest)) return false;
+
+      setMaterials((previous) => [...previous, ...incoming]);
+      applyVersion(result.materialVersion);
+      setKnowledge({ points: result.points, prerequisites: result.prerequisites });
+      setGraph({
+        sessionId: result.sessionId,
+        materialVersion: result.materialVersion,
+        rootConceptId: null,
+        nodes: result.graph.nodes,
+        edges: result.graph.edges,
+      });
+      // 材料变了：已有回答的依据可能不再成立（用例 E12）
+      setHistory((previous) => previous.map((turn) => ({ ...turn, stale: true })));
+      // 同理，旧的选中项可能已不存在于新图谱里 —— 清掉，避免高亮一个不存在的节点
+      setFocusedNodeId(null);
+      setNotice({
+        kind: 'info',
+        text:
+          `已解析 ${incoming.length} 段材料，得到 ${result.points.length} 个知识点、` +
+          `${result.prerequisites.length} 条前置关系。`,
+      });
+      clearFailure();
+      return true;
+    },
+    [applyVersion, clearFailure, stillCurrent],
+  );
+
   const submitMaterials = useCallback(
     async (texts: string[]): Promise<boolean> => {
       const trimmed = texts.map((text) => text.trim()).filter((text) => text.length > 0);
@@ -509,29 +556,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
         }
         setParseUnavailable([...unavailable]);
 
-        const result = await api.knowledge({ sessionId: id, materials: incoming });
-        if (!stillCurrent(versionAtRequest)) return false;
-
-        setMaterials((previous) => [...previous, ...incoming]);
-        applyVersion(result.materialVersion);
-        setKnowledge({ points: result.points, prerequisites: result.prerequisites });
-        setGraph({
-          sessionId: result.sessionId,
-          materialVersion: result.materialVersion,
-          rootConceptId: null,
-          nodes: result.graph.nodes,
-          edges: result.graph.edges,
-        });
-        // 材料变了：已有回答的依据可能不再成立（用例 E12）
-        setHistory((previous) => previous.map((turn) => ({ ...turn, stale: true })));
-        // 同理，旧的选中项可能已不存在于新图谱里 —— 清掉，避免高亮一个不存在的节点
-        setFocusedNodeId(null);
-        setNotice({
-          kind: 'info',
-          text: `已解析 ${trimmed.length} 段材料，得到 ${result.points.length} 个知识点、${result.prerequisites.length} 条前置关系。`,
-        });
-        clearFailure();
-        return true;
+        return await commitMaterialsToSession(id, incoming, versionAtRequest);
       } catch (error) {
         rememberFailure(
           { kind: 'knowledge', texts: trimmed },
@@ -543,14 +568,92 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
       }
     },
     [
-      applyVersion,
       begin,
-      clearFailure,
+      commitMaterialsToSession,
       end,
       ensureMaterialSession,
       materials,
       rememberFailure,
-      stillCurrent,
+    ],
+  );
+
+  /**
+   * 图片材料（视觉入口，2026-09-21 接入）。
+   *
+   * 与 `submitMaterials` 的差别**只在前半段**：文本由**服务端**从图片识别得到
+   * （`POST /api/parse` 的视觉路径，见 `apps/server/src/parse/vision.ts`）；
+   * 拿到文本之后就是一份普通材料，下游完全复用 `commitMaterialsToSession`，
+   * **不另起一条管道**。
+   *
+   * 两条与文字路径不同的处置，都写在代码里而不是留给读者猜：
+   * - **总量闸门放在识别之后**：图片材料有多长，只有识别完才知道；
+   * - **不注册"重试"**：失败可能发生在识别之前（读盘 / 超限 / 不是图片），
+   *   那时并没有文本可留作 `rememberFailure` 的依据。留一份假文本比不留更糟，
+   *   所以失败后让学生重新选图（`retryLastFailed` 只覆盖文字材料）。
+   */
+  const submitImage = useCallback(
+    async (file: File): Promise<boolean> => {
+      const read = await readImageFile(file);
+      if (!read.ok) {
+        setNotice({ kind: 'warn', text: read.problem });
+        return false;
+      }
+
+      if (!begin('knowledge')) return false;
+      try {
+        const id = await ensureMaterialSession();
+        const versionAtRequest = versionRef.current;
+
+        // 识别：图片 → 文本（服务端经已接入的模型通道完成，非本机推断）
+        const parsed = await api.parse({ imageBase64: read.base64 });
+
+        const recognized = parsed.text.trim();
+        if (recognized.length === 0) {
+          setNotice({
+            kind: 'warn',
+            text: '这张图片没有识别出可用的文字，请换一张更清晰的图片，或直接把文字粘贴进来。',
+          });
+          return false;
+        }
+
+        const total = totalTextLength(materials) + recognized.length;
+        if (total > MATERIAL_LIMITS.maxTextLength) {
+          setNotice({
+            kind: 'error',
+            text:
+              `材料文本合计不能超过 ${MATERIAL_LIMITS.maxTextLength} 字：` +
+              `已有 ${totalTextLength(materials)} 字，本次识别出 ${recognized.length} 字。` +
+              `请缩短内容或开始新学习。`,
+          });
+          return false;
+        }
+
+        setParseUnavailable(parsed.unavailable ?? []);
+
+        const incoming: Material[] = [
+          {
+            id: newId(),
+            kind: 'upload',
+            text: recognized,
+            // 识别可能不准的片段照常带上，界面会标出来（§2.2）
+            ...(parsed.lowConfidence.length > 0 ? { lowConfidence: parsed.lowConfidence } : {}),
+            createdAt: new Date().toISOString(),
+          },
+        ];
+        return await commitMaterialsToSession(id, incoming, versionAtRequest);
+      } catch (error) {
+        setNotice(toNotice(error, '图片识别失败，请重试，或直接把文字粘贴进来。'));
+        return false;
+      } finally {
+        end('knowledge');
+      }
+    },
+    [
+      begin,
+      commitMaterialsToSession,
+      end,
+      ensureMaterialSession,
+      materials,
     ],
   );
 
@@ -965,6 +1068,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     parseUnavailable,
     focusedNodeId,
     submitMaterials,
+    submitImage,
     correctMaterial,
     supplementGap,
     claimKnown,

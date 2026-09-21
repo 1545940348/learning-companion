@@ -77,6 +77,28 @@ export interface BuildInfo {
   builtAt: string | null;
 }
 
+/**
+ * 识别通道能力状态（`GET /api/health` 如实报告，V2.0 §5.2）。
+ *
+ * 与 `VerificationEngineStatus` 同一形状，但多一个 `note`：
+ * 识别能力"未接入"不等于"坏了"，需要一句话说清边界，
+ * 否则评委与队友只能靠猜（§9 诚实性红线）。
+ */
+export interface RecognitionCapabilityStatus {
+  /** 通道标识，如 `model-vision` / `browser-speech` */
+  engine: string;
+  /** 是否可用；未接入时为 false，**不得伪报 true** */
+  available: boolean;
+  /** 能力边界的一句话说明（给人看） */
+  note: string;
+}
+
+/** 两个识别入口的能力状态 */
+export interface RecognitionCapabilities {
+  image: RecognitionCapabilityStatus;
+  audio: RecognitionCapabilityStatus;
+}
+
 export interface HealthResponse {
   ok: boolean;
   /**
@@ -93,6 +115,13 @@ export interface HealthResponse {
   /** 为 true 表示当前使用 mock 适配器，未接真实模型 */
   mock: boolean;
   verification: VerificationEngineStatus;
+  /**
+   * 识别通道（图片 / 语音）的真实可用性。
+   *
+   * **可选字段**（加性变更，与 `build?` 同一处理）：旧版服务端不返回它，
+   * 读它的代码不得假定其存在。
+   */
+  capabilities?: RecognitionCapabilities;
   /**
    * 运行形态。**可选字段**（加性变更，消费方无需改动）：
    * 旧版服务端不返回它，读它的代码不得假定其存在。

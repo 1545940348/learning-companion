@@ -5,12 +5,14 @@
  * - 识别文本**默认可直接使用**，不设"请确认识别结果"的阻断步骤；
  * - 识别不准的地方标「识别可能不准」，学生可就地修改；
  * - 两种上传动作分开：「补充当前材料」保留旧材料与图谱，「开始新学习」另起会话；
- * - 图文语音三个入口都**如实提示未接入**，不假装已识别（§9）。
+ * - **图片入口已接入**（2026-09-21）：图片由**服务端**识别为文本后按普通材料提交，
+ *   与文字材料走同一条下游管道；**语音入口仍未接入**，且识别将在**浏览器侧**发生，
+ *   届时界面必须写明这一点（不得声称服务端具备语音识别）。
  */
 
 import { useRef, useState } from 'react';
-import type { ReactNode } from 'react';
-import { MATERIAL_LIMITS } from '@lc/contracts';
+import type { ChangeEvent, ReactNode } from 'react';
+import { MATERIAL_LIMITS, MAX_VOICE_SECONDS } from '@lc/contracts';
 import type { UiMaterial, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
 import { totalTextLength } from '../hooks/useWorkbench';
 
@@ -46,22 +48,30 @@ export function MaterialPanel({ wb, mock }: Props) {
     if (ok) setDraft('');
   }
 
-  /** 图片入口：服务端尚未接入视觉识别时如实告知，不静默丢弃（§9） */
-  function handleImagePicked() {
-    if (fileRef.current) fileRef.current.value = '';
-    wb.notify(
-      '视觉识别尚未接入：目前上传图片无法识别内容。请把讲义或题目的文字粘贴到输入框里 —— ' +
-        '文字路径是完整可用的。',
-      'warn',
-    );
+  /** 图片入口（按钮）：打开文件选择框 */
+  function openImagePicker() {
+    fileRef.current?.click();
   }
 
-  /** 语音入口：与图片同理，入口存在但如实说明未接入（A1 要求三个入口齐全） */
+  /**
+   * 图片入口（选好文件后）：交给**服务端**识别（`capabilities.image.available` 为真）。
+   *
+   * 先清空 `input.value`：否则连续选择**同一个文件**不会再触发 `change`，
+   * 学生"重试同一张图"时界面会毫无反应（这类静默无响应最难排查）。
+   */
+  function handleImagePicked(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (fileRef.current) fileRef.current.value = '';
+    if (!file) return;
+    void wb.submitImage(file);
+  }
+
+  /** 语音入口：服务端不转写语音（识别在浏览器侧，属下一批工作），如实说明 */
   function handleAudioPicked() {
     if (audioRef.current) audioRef.current.value = '';
     wb.notify(
-      '语音转写尚未接入：目前不能从音频识别内容。请把要问的内容打成文字 —— ' +
-        `文字路径是完整可用的（单段语音接入后上限 ${60} 秒）。`,
+      '语音入口尚未接入：服务端不做语音转写。请把要问的内容打成文字 —— ' +
+        `文字路径是完整可用的（单段语音上限 ${MAX_VOICE_SECONDS} 秒）。`,
       'warn',
     );
   }
@@ -99,7 +109,7 @@ export function MaterialPanel({ wb, mock }: Props) {
         >
           {parsing ? '正在解析…' : hasMaterials ? '补充当前材料' : '解析这份材料'}
         </button>
-        <button className="btn btn-ghost" onClick={handleImagePicked} disabled={wb.anyBusy}>
+        <button className="btn btn-ghost" onClick={openImagePicker} disabled={wb.anyBusy}>
           上传图片
         </button>
         <button className="btn btn-ghost" onClick={handleAudioPicked} disabled={wb.anyBusy}>
