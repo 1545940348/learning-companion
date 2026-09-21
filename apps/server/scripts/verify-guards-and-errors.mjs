@@ -35,6 +35,12 @@ import { ApiError, errorHandler } from '../src/http/routes.js';
 import { ModelError } from '../src/model/errors.js';
 import { SessionNotFoundError, SessionVersionConflictError } from '../src/store/index.js';
 import { mapModelError } from '../src/http/model-error-map.js';
+import {
+  buildDroppedBlocks,
+  containsUuid,
+  toStudentReason,
+} from '../src/http/student-reason.js';
+import { validateAnswerBlocks } from '@lc/teaching';
 
 let passed = 0;
 let failed = 0;
@@ -288,6 +294,76 @@ console.log('\n9. 入参守卫（形状不合法一律 400，不再落到 500）
 
   // 非空文本
   check('conceptId 空白 → 拒绝', guardNonEmptyText('  ', 'conceptId').ok === false);
+}
+
+/* ==================== 10. 被拒块的「对外表述」（`W0-7`：`I35` 话术 / `I14` 正面路径） ==================== */
+console.log('\n10. 被拒块的对外表述（I35 话术改写 / I14 正面路径）');
+
+{
+  /*
+   * 这两条原先都挂在 `todo.md` §已登记断点 里，标注为"未造假断言"的空档：
+   *  —— `I35`：`toStudentReason()` 是 `routes.ts` 的私有函数，而该文件在模块顶层
+   *            就 `Router()` 建路由表，import 它会连 express 一起拉起；
+   *  —— `I14`：mock 回答**恒为单块**，构造不出"部分通过、部分被拒"的输入。
+   * 处置（`W0-7`）：把这两段逻辑提到**无副作用**的 `http/student-reason.ts`，
+   * 本组因此能对**真实实现**下断言，而不是另写一份"复述逻辑"的假断言。
+   */
+  const unknownRefId = '9f1c2b7a-1111-4222-8333-444455556666';
+  const blockWithUnknownRef = {
+    content: '这一段引用了并不存在的来源',
+    sourceType: 'material',
+    verification: 'unverified',
+    citations: [{ refId: unknownRefId, sourceType: 'material', excerpt: '摘录' }],
+  };
+
+  // ---- I35：含未知 refId 的 reason，改写后不得把内部 id 漏给学生 ----
+  const onlyRejected = validateAnswerBlocks([blockWithUnknownRef], [], { requireAuthorization: true });
+  check(
+    '前置：造出「引用的来源不存在」的拒绝',
+    onlyRejected.rejected.length === 1 && onlyRejected.valid.length === 0,
+    `valid=${onlyRejected.valid.length} rejected=${onlyRejected.rejected.length}`,
+  );
+
+  const rawReason = onlyRejected.rejected[0]?.reason ?? '';
+  check(
+    '★ 原始 reason 里**确实带** uuid（否则本组断言等于空跑）',
+    containsUuid(rawReason),
+    rawReason,
+  );
+
+  const rewritten = toStudentReason(rawReason);
+  check(
+    '★ 改写后**不得出现** uuid —— I35 的核心判据',
+    !containsUuid(rewritten),
+    rewritten,
+  );
+
+  // ---- I14 正面路径：一块通过 + 一块被拒 ----
+  const okBlock = {
+    content: '正常的一段',
+    sourceType: 'material',
+    verification: 'unverified',
+    citations: [],
+  };
+  const mixed = validateAnswerBlocks([okBlock, blockWithUnknownRef], [], { requireAuthorization: true });
+  check(
+    '★ 一块通过 + 一块被拒 → valid=1 / rejected=1',
+    mixed.valid.length === 1 && mixed.rejected.length === 1,
+    `valid=${mixed.valid.length} rejected=${mixed.rejected.length}`,
+  );
+
+  const dropped = buildDroppedBlocks(mixed.rejected);
+  check(
+    '★ droppedBlocks 出现且 count===1 —— I14 的正面路径（此前只有一条否定断言）',
+    dropped !== null && dropped.count === 1,
+    JSON.stringify(dropped),
+  );
+  check(
+    '★ reasons 非空，且同样不含 uuid',
+    (dropped?.reasons.length ?? 0) > 0 && (dropped?.reasons ?? []).every((r) => !containsUuid(r)),
+    JSON.stringify(dropped?.reasons),
+  );
+  check('★ 无丢弃时返回 null（不凭空造出契约字段）', buildDroppedBlocks([]) === null);
 }
 
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);

@@ -143,8 +143,15 @@ export function App() {
         <div className="footer-block">
           <strong>本页尚未接入</strong>
           <span>
-            图片与语音识别、符号验证引擎、教师视图、多智能体编排、错题归因。
+            图片与语音识别、教师视图、多智能体编排、错题归因。
             这些入口要么不出现，要么出现时明确说明不可用，不以占位内容冒充已实现。
+          </span>
+        </div>
+        <div className="footer-block">
+          <strong>符号验证的边界</strong>
+          <span>
+            覆盖求导值、切线、单调区间、极值点四类断言；超出课程范围或超出输入规模的一律标为
+            「未验证」，不会当成已验证。
           </span>
         </div>
       </footer>

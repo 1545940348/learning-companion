@@ -81,6 +81,7 @@ import {
   guardTopic,
   type Guard,
 } from './request-guards.js';
+import { buildDroppedBlocks } from './student-reason.js';
 import {
   SessionNotFoundError,
   SessionVersionConflictError,
@@ -207,33 +208,9 @@ function toAllowedRefs(session: Session): AllowedRef[] {
   ];
 }
 
-/**
- * 把校验层的拒绝原因改写成**面向学生**的话术（`I35`）。
- *
- * 契约对 `droppedBlocks.reasons` 的定位就是"给学生看的说明"，而
- * `packages/teaching/src/validate.ts` 的三条 reason 都内插了 `citation.refId`
- * （补充块的 refId 是 `randomUUID`）—— 前端原样渲染，学生就会看到
- * 「引用的来源不存在：9f1c2b7a-…」这种内部标识。**内部 id 不该出现在学生界面上**。
- *
- * 处置选择：在**服务端**改写（而不是让前端去猜/去截断），原因有二 ——
- * ① 契约说这些字符串本就是给学生的话术，那就该由产出方保证它可读；
- * ② 前端截断是"按形态猜"，一旦 reason 文案变化就会静默失效。
- * 原始文本**不丢**：`/api/tutor` 在丢弃发生时记一条 `tutor.blocks.dropped` 日志，
- * 排查时仍能看到是哪个 refId 出的问题。
- */
-function toStudentReason(reason: string): string {
-  if (reason === 'AI 补充内容未经学生授权') return reason; // 本身无 id，可直接展示
-  if (reason.startsWith('引用的来源不存在')) {
-    return '回答引用了本次会话中不存在的来源，因此这一段没有展示';
-  }
-  if (reason.startsWith('引用了未经授权的补充块')) {
-    return '回答引用了你尚未授权使用的补充内容，因此这一段没有展示';
-  }
-  if (reason.startsWith('摘录无法在来源中定位')) {
-    return '回答的摘录无法在你提供的来源里定位，因此这一段没有展示';
-  }
-  return '有一段回答未通过来源校验，因此没有展示';
-}
+/* 学生话术改写（`I35`）已提到**无副作用**的叶子模块 `./student-reason.js`（`W0-7①`）——
+ * 原先是本文件里的私有函数，而本文件在模块顶层就 `Router()` 建路由表，
+ * 验证脚本 import 它会连 express 一起拉起，断言跑不起来。 */
 
 /** 版本不匹配时拒绝，促使前端丢弃过期响应（说明书 5.3） */
 function assertVersion(session: Session, materialVersion: number): void {  if (materialVersion !== session.materialVersion) {
@@ -439,6 +416,10 @@ apiRouter.post(
       );
     }
 
+    // 被拒块的**对外**表述（`I14`/`I35`）：构造逻辑在 `student-reason.ts`，
+    // 无丢弃时为 `null` —— 此处只负责"有则挂上"
+    const droppedBlocks = buildDroppedBlocks(rejected);
+
     if (rejected.length > 0) {
       // I35：原始原因（含 refId）只留在服务端日志里，学生界面拿到的是改写后的话术
       logger.warn('tutor.blocks.dropped', {
@@ -453,21 +434,9 @@ apiRouter.post(
       // I36：按契约语义取「有没有学生材料」，不用教学层的切片长度（后者含补充块）
       basedOnMaterial: hasStudentMaterial,
       ...(result.nextStep ? { nextStep: result.nextStep } : {}),
-      /*
-       * `I14`：**有块通过时，其余被拒的块不得无声消失**（§4.3「不静默」）。
-       * 原先只在"全部被拒"时报错，一旦有块通过，被拒块就从响应里消失了 ——
-       * 学生看到的是残缺答案，且无从知道少了一段。
-       * 全部被拒时走上一条 `throw`（403），因此本字段只在"部分被丢弃"时出现。
-       */
-      ...(rejected.length > 0
-        ? {
-            droppedBlocks: {
-              count: rejected.length,
-              // I35：先记录原始原因（含内部 refId，供排查），再交给界面用学生话术
-              reasons: [...new Set(rejected.map((item) => toStudentReason(item.reason)))],
-            },
-          }
-        : {}),
+      // `I14`：有块通过时，其余被拒的块不得无声消失（§4.3「不静默」）——
+      // 构造逻辑见 `student-reason.ts` 的 `buildDroppedBlocks()`，无丢弃时为 `null`
+      ...(droppedBlocks ? { droppedBlocks } : {}),
     };
     res.json(response);
   }),
