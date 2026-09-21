@@ -143,7 +143,7 @@ export function App() {
         <div className="footer-block">
           <strong>本页尚未接入</strong>
           <span>
-            图片与语音识别、教师视图、多智能体编排、错题归因。
+            语音识别、教师视图、多智能体编排、错题归因。
             这些入口要么不出现，要么出现时明确说明不可用，不以占位内容冒充已实现。
           </span>
         </div>
