@@ -49,7 +49,7 @@ export function createMockAdapter(): ModelAdapter {
   return {
     name: 'mock',
     isMock: true,
-    call: async (input, options) => mockRespond(toPromptText(input), options),
+    call: async (input, options) => mockRespond(input, options),
   };
 }
 
@@ -67,8 +67,49 @@ function parseRefIds(prompt: string): { materialIds: string[]; supplementIds: st
   return { materialIds, supplementIds };
 }
 
-function mockRespond(prompt: string, options?: ModelCallOptions): string {
+/** 输入里是否带了图片块（判定"这是视觉识别"的**唯一**依据） */
+function hasImageBlock(input: ModelInput): boolean {
+  return typeof input !== 'string' && input.some((block) => block.type === 'image');
+}
+
+/**
+ * mock 的图片识别结果（演示数据）。
+ *
+ * ### 为什么 mock 也必须回**结构化 JSON**
+ *
+ * `parse/vision.ts` 要求模型返回结构化 JSON；若 mock 仍回一段普通文本，
+ * 学生界面在 mock 下只会看到"降级"提示 —— 于是
+ * **演示与录屏看不到"图片识别成功"的样子，回归也断言不了这条路径**。
+ * 这与 `I1`（图谱关系边）/ `I31`（补充块引用）/ `I34`（引用落位）
+ * 是**同一条教训**：mock 不保真 → 真实通道修了也看不到效果。
+ *
+ * 内容取说明书 §7.1 的固定案例，与演示分镜一致；
+ * 两条公式都**真实出现在正文里**，因此会走通"定位成功才保留"那条分支。
+ */
+function mockVision(): string {
+  return JSON.stringify({
+    text:
+      '判断函数 f(x)=x^{3}-3x 的单调性与极值。\n' +
+      "先求导数 f'(x)=3x^{2}-3，令其为零得 x=-1 与 x=1。",
+    imageDescription: '一道关于单调性与极值的题目（演示数据）',
+    imageStructure: { chartType: '无', trend: '先增、后减、再增' },
+    formulas: ['f(x)=x^{3}-3x', "f'(x)=3x^{2}-3"],
+    lowConfidence: [],
+  });
+}
+
+/**
+ * mock 的分发。
+ *
+ * ⚠️ **视觉判定必须放在最前，且不看提示词**：该路径的标志是"输入里真的有图片块"，
+ * 而不是某段系统提示词。放在后面会被 `mockTutor` 的兜底分支吃掉，
+ * 返回一个没有 `text` 字段的答疑 JSON —— 识别层只能如实报"没识别出文字"。
+ */
+function mockRespond(input: ModelInput, options?: ModelCallOptions): string {
   const system = options?.system ?? '';
+  if (hasImageBlock(input)) return mockVision();
+
+  const prompt = toPromptText(input);
   const { materialIds, supplementIds } = parseRefIds(prompt);
 
   if (system.includes('备课模块')) {

@@ -27,6 +27,7 @@ import {
   verifySupplementContent,
   type AllowedRef,
   type MaterialSlice,
+  type ModelCaller,
   type TeachingModule,
 } from '@lc/teaching';
 import type {
@@ -60,6 +61,8 @@ import { logger } from '../logger.js';
 import { createBudget, withBudget } from '../model/budget.js';
 import { ModelError, redact } from '../model/errors.js';
 import { createModelAdapter } from '../model/index.js';
+import { RECOGNITION_CAPABILITIES } from '../parse/capabilities.js';
+import { VisionInputError, normalizeImage, recognizeImage } from '../parse/vision.js';
 import {
   classifyBodyError,
   defaultStatusForApiCode,
@@ -120,6 +123,16 @@ const VERIFICATION_ENGINE: VerificationEngineStatus = {
  */
 function teachingForRequest(): TeachingModule {
   return createTeachingModule(withBudget(adapter.call, createBudget(env.modelTimeoutMs)));
+}
+
+/**
+ * 视觉识别用的模型调用函数（同样挂单请求总预算）。
+ *
+ * 与 `teachingForRequest()` 同源 —— 预算必须**随请求走**，因此不缓存、每次新建。
+ * 识别**不经教学模块**：它不是"教学"而是"把图变成字"，属于 `parse/` 的职责。
+ */
+function budgetedCaller(): ModelCaller {
+  return withBudget(adapter.call, createBudget(env.modelTimeoutMs));
 }
 
 /** 用于文案的预算秒数：与 `MODEL_TIMEOUT_MS` 保持一致，不再写死 60（避免改了配置文案还在说 60 秒） */
@@ -238,6 +251,8 @@ apiRouter.get('/health', (_req, res) => {
     modelProvider: adapter.name,
     mock: adapter.isMock,
     verification: VERIFICATION_ENGINE,
+    // 识别通道（图片/语音）如实报告：语音不由服务端转写，见 parse/capabilities.ts
+    capabilities: RECOGNITION_CAPABILITIES,
     // 运行形态自证（P-C12）：让"线上跑的是哪个产物"可核对，不靠人猜
     build: describeBuild(),
   };
@@ -274,31 +289,57 @@ apiRouter.post(
         `单次输入不能超过 ${MATERIAL_LIMITS.maxSingleInputLength} 字，当前 ${text.length} 字`,
       );
     }
-    if (rawImage && !text) {
+    if (rawAudio && !text && !rawImage) {
       throw new ApiError(
         'BAD_REQUEST',
-        `视觉识别尚未接入，无法仅凭图片识别内容。请补上文字描述（图片上限 ${MATERIAL_LIMITS.maxImageBytes / 1024 / 1024} MB）`,
-      );
-    }
-    if (rawAudio && !text) {
-      throw new ApiError(
-        'BAD_REQUEST',
-        `语音转写尚未接入，无法仅凭语音识别内容。请补上文字描述（单段语音上限 ${MAX_VOICE_SECONDS} 秒）`,
+        `语音不由服务端转写（识别在浏览器侧完成，见 /api/health 的 capabilities.audio）。` +
+          `请用界面上的「语音输入」边说边转文字，或直接粘贴文字（单段语音上限 ${MAX_VOICE_SECONDS} 秒）`,
       );
     }
 
-    // TODO(B5)：接入真实图文语音识别，输出识别文本、公式 LaTeX、图像结构化描述与低置信度片段。
-    // 在接入前，图片与语音**如实报告为未接入**（§9：不以模拟行为冒充真实能力），
-    // 不返回"【占位】图片已接收"这类会被误读为已解析的描述。
+    /*
+     * ==================== 视觉路径（2026-09-21 接入） ====================
+     *
+     * 图片**由服务端识别**（不像语音）：交给 `parse/vision.ts`，用已接入的模型通道
+     * 把图转成文本。识别结果是「文本」，所以下游（材料 → 图谱 → 缺口）
+     * **完全复用现有管道**，这一层只做接线。
+     *
+     * 两类失败分开处置，不混为一谈：
+     * - **入参不合法**（超限/格式不对/不是 base64）→ `VisionInputError` → 400，
+     *   并把**具体原因**透给学生（"图片 6.2 MB 超过上限 5 MB"比"请求无效"有用）；
+     * - **模型侧失败**（超时/鉴权/配额）→ **原样抛出**，交给 `asyncHandler` 与
+     *   `mapModelError` 走既有映射，**不在这里另立一套状态码**。
+     */
+    let recognized: Awaited<ReturnType<typeof recognizeImage>> | null = null;
+    if (rawImage) {
+      try {
+        recognized = await recognizeImage(normalizeImage(rawImage), {
+          // 学生同时写的文字：既当识别提示，也保留进正文（不静默丢内容）
+          ...(text.length > 0 ? { hint: text } : {}),
+          caller: budgetedCaller(),
+        });
+      } catch (error) {
+        if (error instanceof VisionInputError) {
+          throw new ApiError('BAD_REQUEST', error.message);
+        }
+        throw error;
+      }
+    }
+
+    /*
+     * `unavailable` 按**本次真实提供了什么**逐条推导，不用固定值：
+     * - `image`：图片已被识别（上面那段），因此不再列为"未接入"；
+     * - `audio`：服务端不转写语音（`D3` 拍板走浏览器识别）——**如实保留**；
+     * - `formula`：**按本次是否真的拿到公式**判断，而不是永远写死。
+     *   拿不到就是拿不到，写死会让"其实是模型这次没给出公式"被读成"通道没接"。
+     */
     const unavailable: NonNullable<ParseResponse['unavailable']> = [];
-    if (rawImage) unavailable.push('image');
     if (rawAudio) unavailable.push('audio');
-    unavailable.push('formula');
+    if ((recognized?.formulas?.length ?? 0) === 0) unavailable.push('formula');
 
     const response: ParseResponse = {
-      // 识别文本默认可直接使用，不设确认阻断步骤（说明书 2.2）
-      text,
-      lowConfidence: [],
+      // 仅文字：识别文本默认可直接使用，不设确认阻断步骤（说明书 2.2）
+      ...(recognized ?? { text, lowConfidence: [] }),
       ...(unavailable.length > 0 ? { unavailable } : {}),
     };
     res.json(response);
