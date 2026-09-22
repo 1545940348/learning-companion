@@ -175,6 +175,20 @@ body {
   color: var(--text-muted);
 }
 
+/*
+ * 语音输入（A1 三入口之一）。
+ * `display: contents` 让包裹元素**不产生盒子** —— 里面的按钮直接参与 `.actions`
+ * 的横向排列（与「上传图片」并排），而说明文字用 `flex-basis: 100%` 各占一行。
+ * 若不加这一段，几条说明会与按钮挤在同一行里，长句子会把按钮顶出屏外。
+ */
+.voice-input {
+  display: contents;
+}
+
+.voice-input-note {
+  flex-basis: 100%;
+}
+
 .warn-inline {
   font-size: 13px;
   background: var(--warn-bg);

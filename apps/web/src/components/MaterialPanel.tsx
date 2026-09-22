@@ -5,16 +5,20 @@
  * - 识别文本**默认可直接使用**，不设"请确认识别结果"的阻断步骤；
  * - 识别不准的地方标「识别可能不准」，学生可就地修改；
  * - 两种上传动作分开：「补充当前材料」保留旧材料与图谱，「开始新学习」另起会话；
- * - **图片入口已接入**（2026-09-21）：图片由**服务端**识别为文本后按普通材料提交，
- *   与文字材料走同一条下游管道；**语音入口仍未接入**，且识别将在**浏览器侧**发生，
- *   届时界面必须写明这一点（不得声称服务端具备语音识别）。
+ * - **图片入口已接入**（2026-09-21）：图片由**服务端**识别为文本后按普通材料提交；
+ * - **语音入口已接入**（2026-09-22）：语音由**浏览器**转成文字后填入输入框，
+ *   学生看一眼、可以就地改，再点「解析这份材料」才提交。
+ *   两条路径最后都变成**普通文本**，与手打材料走同一条下游管道。
+ *   ⚠️ 识别发生在浏览器、**不在服务端**（`D3`），界面必须写明这一点，
+ *   不得声称服务端具备语音识别能力。
  */
 
 import { useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { MATERIAL_LIMITS, MAX_VOICE_SECONDS } from '@lc/contracts';
+import { MATERIAL_LIMITS } from '@lc/contracts';
 import type { UiMaterial, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
 import { totalTextLength } from '../hooks/useWorkbench';
+import { VoiceInputButton } from './VoiceInputButton';
 
 type Props = { wb: WorkbenchState & WorkbenchActions; mock: boolean };
 
@@ -36,7 +40,6 @@ export function MaterialPanel({ wb, mock }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLInputElement>(null);
 
   const used = totalTextLength(wb.materials);
   const parsing = wb.isBusy('knowledge');
@@ -64,16 +67,6 @@ export function MaterialPanel({ wb, mock }: Props) {
     if (fileRef.current) fileRef.current.value = '';
     if (!file) return;
     void wb.submitImage(file);
-  }
-
-  /** 语音入口：服务端不转写语音（识别在浏览器侧，属下一批工作），如实说明 */
-  function handleAudioPicked() {
-    if (audioRef.current) audioRef.current.value = '';
-    wb.notify(
-      '语音入口尚未接入：服务端不做语音转写。请把要问的内容打成文字 —— ' +
-        `文字路径是完整可用的（单段语音上限 ${MAX_VOICE_SECONDS} 秒）。`,
-      'warn',
-    );
   }
 
   const unavailable = wb.parseUnavailable.filter((item) => UNAVAILABLE_TEXT[item]);
@@ -112,9 +105,6 @@ export function MaterialPanel({ wb, mock }: Props) {
         <button className="btn btn-ghost" onClick={openImagePicker} disabled={wb.anyBusy}>
           上传图片
         </button>
-        <button className="btn btn-ghost" onClick={handleAudioPicked} disabled={wb.anyBusy}>
-          上传语音
-        </button>
         <input
           ref={fileRef}
           type="file"
@@ -122,7 +112,18 @@ export function MaterialPanel({ wb, mock }: Props) {
           hidden
           onChange={handleImagePicked}
         />
-        <input ref={audioRef} type="file" accept="audio/*" hidden onChange={handleAudioPicked} />
+        {/*
+          语音入口。识别结果**只填入输入框，不自动提交** —— 中文语音识别错字多，
+          直接提交会污染整份材料的图谱；学生看一眼、可就地改，再点「解析这份材料」。
+          （图片路径是自动提交的，两条路径在这点上不同，是有意为之，不是遗漏。）
+        */}
+        <VoiceInputButton
+          disabled={wb.anyBusy}
+          onTranscript={(text) =>
+            // 追加而不是覆盖：输入框里已有的内容不能被语音冲掉（`I14`：不静默丢内容）
+            setDraft((prev) => (prev.trim().length > 0 ? `${prev}\n${text}` : text))
+          }
+        />
         <span className="count">
           单次 {draft.length} / {MATERIAL_LIMITS.maxSingleInputLength} 字
         </span>

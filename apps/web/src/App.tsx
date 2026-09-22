@@ -143,8 +143,16 @@ export function App() {
         <div className="footer-block">
           <strong>本页尚未接入</strong>
           <span>
-            语音识别、教师视图、多智能体编排、错题归因。
+            教师视图、多智能体编排、错题归因。
             这些入口要么不出现，要么出现时明确说明不可用，不以占位内容冒充已实现。
+          </span>
+        </div>
+        <div className="footer-block">
+          <strong>语音识别发生在哪里</strong>
+          <span>
+            语音在你的浏览器里转成文字，再作为普通文本进入系统。
+            服务端的识别能力里**不含**语音（服务端不转写语音）——
+            这与「图片由服务端识别」是两回事，在这里分开说明，不合并成一句"支持图文语音"。
           </span>
         </div>
         <div className="footer-block">
