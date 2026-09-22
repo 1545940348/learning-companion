@@ -206,13 +206,68 @@ console.log('--- 1. 材料面板：三个入口齐全 + 未接入如实标注 --
 }
 
 {
-  // 未接入的识别通道必须如实列出（§9）
+  /*
+   * 未接入的识别通道必须如实列出（§9）。
+   *
+   * ⚠️ 这里**只用 `audio`**：`formula` 不是"未接入的通道"（图片路径早已接、纯文字路径
+   * 压根没有"识别公式"这一环），2026-09-22 起服务端也不再产出它。
+   * 原先这条用例写的是 `parseUnavailable: ['formula']` + 断言渲染出「公式识别（LaTeX）」
+   * —— **等于把误报锁进了渲染测试**，所以它一直没被报出来。
+   */
   const html = render(
     '材料面板（有未接入通道）',
-    <MaterialPanel wb={makeWb({ materials: [material], parseUnavailable: ['formula'] })} mock={false} />,
+    <MaterialPanel wb={makeWb({ materials: [material], parseUnavailable: ['audio'] })} mock={false} />,
   );
-  check('★ 如实列出未接入的识别环节', html.includes('公式识别（LaTeX）'), null);
+  check('★ 如实列出未接入的识别环节', html.includes('语音转写'), null);
   check('说明材料按纯文本参与解析', html.includes('纯文本'));
+  check(
+    '★ 公式不再被当成"未接入的环节"（能力 ≠ 结果）',
+    !html.includes('公式识别（LaTeX）'),
+    null,
+  );
+}
+
+{
+  /*
+   * 图片材料识别到的公式（LaTeX **源码**）要看得见；"没找到"与"没接入"要分开说。
+   * 这两条是 2026-09-22 那次修正的**界面落点**，必须锁住 —— 否则改回误报也没人拦。
+   */
+  const withFormulas: UiMaterial = {
+    ...material,
+    id: 'm-formula',
+    text: "设 f(x)=x^{3}-3x，求 f'(x) 与单调区间。",
+    formulas: ['f(x)=x^{3}-3x', "f'(x)=3x^{2}-3"],
+  };
+  const shown = render(
+    '材料面板（图片里有公式）',
+    <MaterialPanel wb={makeWb({ materials: [withFormulas] })} mock={false} />,
+  );
+  check(
+    '★ 图片识别到的公式按 LaTeX 源码展示出来（不再被丢掉）',
+    shown.includes('f(x)=x^{3}-3x') && shown.includes('material-formulas'),
+    null,
+  );
+  check(
+    '公式区写明"本版不做排版"（不把源码冒充排版好的公式）',
+    shown.includes('本版不做排版'),
+  );
+
+  const noFormula: UiMaterial = { ...material, id: 'm-noformula', formulas: [] };
+  const empty = render(
+    '材料面板（图里确实没有公式）',
+    <MaterialPanel wb={makeWb({ materials: [noFormula] })} mock={false} />,
+  );
+  check('★ 图里没公式时中性说明"本次没有"', empty.includes('这张图里没有识别到公式'));
+  check('★ 并明确它不是"通道没接"', empty.includes('不是「公式通道没接」'));
+
+  const plain = render(
+    '材料面板（手打材料）',
+    <MaterialPanel wb={makeWb({ materials: [material] })} mock={false} />,
+  );
+  check(
+    '★ 手打材料对公式一个字都不说（`undefined` 与空数组是两回事）',
+    !plain.includes('没有识别到公式'),
+  );
 }
 
 {

@@ -178,6 +178,56 @@ console.log('--- 0. 能力探测与错误码映射（可直接断言，无副作
   );
 }
 
+/* ==================== 0b. 权限策略禁用麦克风（2026-09-22 新增） ==================== */
+
+console.log('\n--- 0b. 权限策略：麦克风被本站策略禁掉（防回归） ---');
+{
+  /*
+   * 这条为什么必须存在：2026-09-22 线上事故的根因就是服务端一条
+   * `Permissions-Policy: microphone=()` —— 浏览器**连授权弹窗都不弹**、直接回
+   * `not-allowed`，界面于是告诉学生"去地址栏放行麦克风"，而地址栏根本没有那个图标。
+   * 那个头已改掉（`microphone=(self)`）；这里锁的是**界面这一侧的判别能力**：
+   * 哪天网关/代理又加上同样的头，界面要能说出真正的原因。
+   */
+  const withPolicy = (allows: boolean) => ({
+    speechRecognition: FakeRecognition,
+    isSecureContext: true,
+    permissionsPolicy: { allowsFeature: () => allows },
+  });
+
+  const blocked = detectVoiceSupport(withPolicy(false));
+  check(
+    '★ 策略禁用麦克风 → 判定为「被策略禁用」（不是混进 not-allowed）',
+    blocked.supported === false && blocked.code === 'policy-blocked',
+  );
+  check(
+    '★ 文案点明"不会弹出授权提示、改浏览器设置也没用"（否则又把人引去地址栏白找一趟）',
+    blocked.supported === false &&
+      /不会弹出授权提示/.test(blocked.problem) &&
+      /改浏览器设置也没用/.test(blocked.problem),
+    blocked.supported === false ? blocked.problem : null,
+  );
+  check(
+    '★ 标为不可重试（学生改不了部署配置，诱使他再点一次只是浪费他的时间）',
+    blocked.supported === false && blocked.retryable === false,
+  );
+  check('策略放行 → 照常判定为支持', detectVoiceSupport(withPolicy(true)).supported === true);
+  check(
+    '读不到策略对象（老浏览器 / node）→ 当"未知"，不擅自拦（undefined ≠ 被禁）',
+    detectVoiceSupport({ speechRecognition: FakeRecognition, isSecureContext: true }).supported === true,
+  );
+
+  // 端到端：拦在**起手**，连引擎实例都不创建 —— 不惊动麦克风
+  FakeRecognition.latest = null;
+  const outcome = await startVoiceInput({ env: withPolicy(false), logger: silentVoiceLogger }).result;
+  check(
+    '★ 起手即拦：不抛异常、失败码为 policy-blocked',
+    !outcome.ok && outcome.code === 'policy-blocked',
+    outcome,
+  );
+  check('★ 引擎实例根本没被创建（没有惊动麦克风）', FakeRecognition.latest === null);
+}
+
 /* ==================== 1. 起手就被挡下的两种 ==================== */
 
 console.log('\n--- 1. 起手拦截：不支持的浏览器 / 非 https ---');

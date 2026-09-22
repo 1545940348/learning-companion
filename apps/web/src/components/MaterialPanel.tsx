@@ -28,11 +28,21 @@ const PLACEHOLDER = `把讲义、题目或任何看不懂的段落粘贴到这�
 判断 f(x) 的单调性时，只需看 f'(x) 的符号：
 f'(x) > 0 时函数递增，f'(x) < 0 时函数递减。`;
 
-/** 尚未接入的识别通道 → 面向学生的说明（**不假装已解析**） */
+/**
+ * 尚未接入的识别通道 → 面向学生的说明（**不假装已解析**）。
+ *
+ * ⚠️ **不含 `formula`**（2026-09-22 修正）：公式**不是**"未接入的通道" ——
+ * 图片路径早已把 LaTeX 识别出来（只是原先被前端丢掉，见 `useWorkbench` 的 `formulas`），
+ * 而纯文字输入**压根没有"识别公式"这一环**。
+ * 把它列在这里的后果：纯文字输入**必然**显示「公式识别（LaTeX）未接入」，
+ * 图片里本来没有公式（纯叙述段落）时也显示 —— 两处都是假话（用户当场指正）。
+ *
+ * 约定（别再来一次）：**"能力有没有"用这张表说，"本次有没有结果"用材料条目上的说明说。**
+ * `image` 同理已接入，留在这里只为兼容更早的服务端快照（新响应不会再带它）。
+ */
 const UNAVAILABLE_TEXT: Record<string, string> = {
   image: '图片识别',
   audio: '语音转写',
-  formula: '公式识别（LaTeX）',
 };
 
 export function MaterialPanel({ wb, mock }: Props) {
@@ -194,6 +204,28 @@ export function MaterialPanel({ wb, mock }: Props) {
                 ) : (
                   <p className="material-text">{renderText(item)}</p>
                 )}
+
+                {/*
+                  图片材料才有的公式区（`UiMaterial.formulas`，2026-09-22 接入）。
+                  **两种结果说法不同，不许混**：
+                  · 有公式 → 列出 LaTeX **源码**（本版不做排版渲染，故不引依赖）；
+                  · 空数组 → 说清"本次没找到"，并**明确指出这不是"通道没接"** ——
+                    否则学生（和评委）会把它读成功能缺失。
+                  手打材料是 `undefined`，这里一个字都不显示。
+                */}
+                {item.formulas !== undefined &&
+                  (item.formulas.length > 0 ? (
+                    <div className="material-formulas">
+                      <span>图片里识别到的公式（LaTeX 源码，本版不做排版）：</span>
+                      {item.formulas.map((latex, index) => (
+                        <code key={`formula-${index}`}>{latex}</code>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="hint-inline">
+                      这张图里没有识别到公式 —— 这是「本次」识别的结果，不是「公式通道没接」。
+                    </p>
+                  ))}
               </li>
             ))}
           </ul>

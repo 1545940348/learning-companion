@@ -433,6 +433,33 @@ console.log('\n5. 安全响应头（必须对所有响应生效，含 /api 与 4
     apiHeaders.filter((value) => value === null).length + ' 条缺失',
   );
 
+  /*
+   * ⑧′ `Permissions-Policy` 的 `microphone` **不许是空名单**（2026-09-22 新增）。
+   *
+   * 为什么必须**单列一条**：上面 ③–⑦ 是拿 `SECURITY_HEADERS` 常量自己比自己 ——
+   * 谁把 `microphone=()` 写回去，那条断言照样绿。而这正是 2026-09-22 的真实事故：
+   * 空名单 = "本站谁都不许用麦克风"，浏览器**连授权弹窗都不弹**、直接回 `not-allowed`，
+   * 界面上「语音输入」看上去就是坏的，且错误原因指向学生（"你拒绝过权限"）。
+   *
+   * 口径：**"通道没接"要写在能力声明里（`/api/health` 的 `capabilities`），
+   * 不能靠一个安全头把功能悄悄关掉。** 这里断言"同源被放行、且不是通配"。
+   */
+  const permissionsPolicy = home.headers.get('permissions-policy') ?? '';
+  const micDirective = permissionsPolicy
+    .split(',')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('microphone'));
+  check(
+    '★ Permissions-Policy 的 microphone 不是空名单（空名单会让语音静默失能）',
+    micDirective !== undefined && !/^microphone=\(\)$/.test(micDirective),
+    micDirective ?? '(缺 microphone 指令)',
+  );
+  check(
+    '★ microphone 只放行同源（不是通配 `*`）',
+    micDirective === 'microphone=(self)',
+    micDirective ?? '(缺 microphone 指令)',
+  );
+
   // ⑨ 404 响应也带（错误路径同样不该裸奔）
   check(
     '★ 404 响应也带安全头（含 X-Content-Type-Options）',

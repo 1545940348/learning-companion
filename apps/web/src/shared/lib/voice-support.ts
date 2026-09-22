@@ -24,6 +24,7 @@
  */
 
 import { MAX_VOICE_SECONDS, type TranscriptSpan } from '@lc/contracts';
+import { readMicPolicyAllowed, type PolicyEnvironment } from './voice-policy.js';
 
 /* ==================== 日志 ==================== */
 
@@ -98,8 +99,11 @@ export type SpeechRecognitionCtorLike = new () => SpeechRecognitionLike;
  * 可注入的运行环境（默认 `globalThis`）。
  *
  * 测试里传一个假对象，即可在不装浏览器、不用真麦克风的前提下覆盖全部分支。
+ *
+ * 扩展 `PolicyEnvironment`：能不能用麦克风，不只取决于浏览器**支不支持**，
+ * 还取决于页面所在源的权限策略**让不让** —— 后者见 `voice-policy.ts`（含 09-22 那次事故的来龙去脉）。
  */
-export interface VoiceEnvironment {
+export interface VoiceEnvironment extends PolicyEnvironment {
   speechRecognition?: SpeechRecognitionCtorLike | undefined;
   webkitSpeechRecognition?: SpeechRecognitionCtorLike | undefined;
   isSecureContext?: boolean | undefined;
@@ -111,6 +115,7 @@ export interface VoiceEnvironment {
 export type VoiceFailureCode =
   | 'unsupported' // 浏览器没有这个能力
   | 'insecure-context' // 非 https，浏览器禁止用麦克风
+  | 'policy-blocked' // 本站权限策略禁了麦克风（连授权弹窗都不会有）
   | 'not-allowed' // 权限被拒
   | 'audio-capture' // 找不到麦克风
   | 'network' // 识别服务连不上
@@ -152,6 +157,17 @@ const FAILURE_INFO: Record<VoiceFailureCode, { problem: string; retryable: boole
   },
   'insecure-context': {
     problem: '当前不是安全连接（https），浏览器不允许使用麦克风。请直接把问题打字输入。',
+    retryable: false,
+  },
+  // 2026-09-22 新增。服务端曾对**所有响应**发 `Permissions-Policy: microphone=()`，
+  // 浏览器因此**连授权弹窗都不弹**，直接回 `not-allowed`。
+  // 它必须与"学生自己点过拒绝"分开说：后者的出路是去地址栏放行，
+  // 而前者**学生改不了**（地址栏连图标都没有），叫学生去点只是浪费他的时间。
+  // 部署侧要查的是响应头 `Permissions-Policy` 的 microphone 是否为 `(self)`。
+  'policy-blocked': {
+    problem:
+      '本站的部署配置禁用了麦克风，浏览器不会弹出授权提示，改浏览器设置也没用 —— ' +
+      '这是本站的问题，不是你的操作问题。请先把问题打字输入。',
     retryable: false,
   },
   'not-allowed': {
@@ -218,7 +234,7 @@ export type VoiceSupport =
   | { supported: true }
   | {
       supported: false;
-      code: Extract<VoiceFailureCode, 'unsupported' | 'insecure-context'>;
+      code: Extract<VoiceFailureCode, 'unsupported' | 'insecure-context' | 'policy-blocked'>;
       problem: string;
     };
 
@@ -245,6 +261,11 @@ export function detectVoiceSupport(
   // 不等于"不安全"，那种情况交给上游错误事件回答，不在这里替它下结论。
   if (env.isSecureContext === false) {
     return { supported: false, code: 'insecure-context', ...FAILURE_INFO['insecure-context'] };
+  }
+  // 同上，只在**明确**为 `false` 时才拦。策略禁掉麦克风时**不会弹授权框**，
+  // 所以必须赶在"点了才知道"之前说清楚 —— 那种情况下学生看到的"权限被拒"是错的。
+  if (readMicPolicyAllowed(env) === false) {
+    return { supported: false, code: 'policy-blocked', ...FAILURE_INFO['policy-blocked'] };
   }
   return { supported: true };
 }
