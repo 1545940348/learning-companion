@@ -39,6 +39,8 @@ import { MaterialPanel } from '../src/components/MaterialPanel';
 import { ProfilePanel } from '../src/components/ProfilePanel';
 import { QuizPanel } from '../src/components/QuizPanel';
 import { TutorPanel } from '../src/components/TutorPanel';
+import { VoiceInputButton } from '../src/components/VoiceInputButton';
+import type { SpeechRecognitionCtorLike } from '../src/shared/lib/voice-support';
 
 let passed = 0;
 let failed = 0;
@@ -73,6 +75,15 @@ function nodeLabels(markup: string): string[] {
 const noop = async () => {};
 const asyncTrue = async () => true;
 const asyncEmptyItems = async () => [];
+
+/**
+ * 假的识别构造器：只为让能力探测通过。
+ * 它**不会被真正实例化** —— 组件在渲染期只做探测，起停要点了按钮才发生；
+ * 而识别的逻辑分支由 `scripts/verify-voice.ts` 用假对象覆盖。
+ */
+function FakeRecognition(): void {
+  /* 空构造器 */
+}
 
 function makeWb(overrides: Partial<WorkbenchState & WorkbenchActions> = {}): WorkbenchState & WorkbenchActions {
   return {
@@ -126,7 +137,66 @@ console.log('--- 1. 材料面板：三个入口齐全 + 未接入如实标注 --
   const html = render('材料面板（空）', <MaterialPanel wb={makeWb()} mock={false} />);
   check('文字入口存在', html.includes('单次'));
   check('★ 图片入口存在', html.includes('上传图片'));
-  check('★ 语音入口存在（A1 要求三入口齐全）', html.includes('上传语音'));
+  check('★ 语音入口存在（A1 要求三入口齐全）', html.includes('语音输入'));
+  /*
+   * 降级路径：本脚本跑在 node 里，`detectVoiceSupport()` 必然判定"不支持"
+   * （那里没有 `SpeechRecognition`），**正好用来锁"不支持时怎么显示"**：
+   * 必须给出原因，而不是给一个灰按钮了事。
+   */
+  check('★ 不支持时说明原因，不是只给一个灰按钮', html.includes('这个浏览器不支持语音输入'), null);
+  const voiceButton = (html.match(/<button[^>]*>[\s\S]*?<\/button>/g) ?? []).find((tag) =>
+    tag.includes('语音输入'),
+  );
+  check(
+    '★ 不支持时语音按钮被禁用（按按钮文案定位，不是页面级宽匹配）',
+    Boolean(voiceButton) && /disabled/.test(voiceButton ?? ''),
+    voiceButton ?? null,
+  );
+}
+
+{
+  /*
+   * 支持时（`D3` 口径）：必须写明**识别发生在浏览器**、**服务端不做语音转写**，且按钮可用。
+   * node 里没有真的识别对象，故注入一个假的构造器 —— `VoiceInputButton` 的 `env`
+   * 参数就是为这条断言留的口子。少了这一段，"支持时界面长什么样"没有任何覆盖。
+   */
+  const supported = render(
+    '语音按钮（浏览器支持）',
+    <VoiceInputButton
+      onTranscript={() => {}}
+      env={{
+        speechRecognition: FakeRecognition as unknown as SpeechRecognitionCtorLike,
+        isSecureContext: true,
+      }}
+    />,
+  );
+  check('★ 支持时写明「识别在你的浏览器里完成」', supported.includes('识别在你的浏览器里完成'), null);
+  check('★ 支持时写明「服务端不做语音转写」', supported.includes('服务端不做语音转写'), null);
+  check(
+    '★ 支持时按钮可用（既不给 disabled，也不显示"不支持"的理由）',
+    !/<button[^>]*\sdisabled/.test(supported) && !supported.includes('这个浏览器不支持语音输入'),
+    supported.slice(0, 160),
+  );
+}
+
+{
+  /*
+   * 非安全上下文（http 页面）：浏览器禁用麦克风。
+   * 这条必须与"浏览器不支持"**分开说** —— 学生换个浏览器解决不了它，得换 https，
+   * 两句提示混成一句就等于没给出可操作的信息。
+   */
+  const insecure = render(
+    '语音按钮（非 https）',
+    <VoiceInputButton
+      onTranscript={() => {}}
+      env={{
+        speechRecognition: FakeRecognition as unknown as SpeechRecognitionCtorLike,
+        isSecureContext: false,
+      }}
+    />,
+  );
+  check('★ 非 https 时给出的原因与"浏览器不支持"不同', insecure.includes('不是安全连接'), null);
+  check('★ 非 https 时不误报成"浏览器不支持"', !insecure.includes('这个浏览器不支持语音输入'), null);
 }
 
 {
@@ -136,13 +206,68 @@ console.log('--- 1. 材料面板：三个入口齐全 + 未接入如实标注 --
 }
 
 {
-  // 未接入的识别通道必须如实列出（§9）
+  /*
+   * 未接入的识别通道必须如实列出（§9）。
+   *
+   * ⚠️ 这里**只用 `audio`**：`formula` 不是"未接入的通道"（图片路径早已接、纯文字路径
+   * 压根没有"识别公式"这一环），2026-09-22 起服务端也不再产出它。
+   * 原先这条用例写的是 `parseUnavailable: ['formula']` + 断言渲染出「公式识别（LaTeX）」
+   * —— **等于把误报锁进了渲染测试**，所以它一直没被报出来。
+   */
   const html = render(
     '材料面板（有未接入通道）',
-    <MaterialPanel wb={makeWb({ materials: [material], parseUnavailable: ['formula'] })} mock={false} />,
+    <MaterialPanel wb={makeWb({ materials: [material], parseUnavailable: ['audio'] })} mock={false} />,
   );
-  check('★ 如实列出未接入的识别环节', html.includes('公式识别（LaTeX）'), null);
+  check('★ 如实列出未接入的识别环节', html.includes('语音转写'), null);
   check('说明材料按纯文本参与解析', html.includes('纯文本'));
+  check(
+    '★ 公式不再被当成"未接入的环节"（能力 ≠ 结果）',
+    !html.includes('公式识别（LaTeX）'),
+    null,
+  );
+}
+
+{
+  /*
+   * 图片材料识别到的公式（LaTeX **源码**）要看得见；"没找到"与"没接入"要分开说。
+   * 这两条是 2026-09-22 那次修正的**界面落点**，必须锁住 —— 否则改回误报也没人拦。
+   */
+  const withFormulas: UiMaterial = {
+    ...material,
+    id: 'm-formula',
+    text: "设 f(x)=x^{3}-3x，求 f'(x) 与单调区间。",
+    formulas: ['f(x)=x^{3}-3x', "f'(x)=3x^{2}-3"],
+  };
+  const shown = render(
+    '材料面板（图片里有公式）',
+    <MaterialPanel wb={makeWb({ materials: [withFormulas] })} mock={false} />,
+  );
+  check(
+    '★ 图片识别到的公式按 LaTeX 源码展示出来（不再被丢掉）',
+    shown.includes('f(x)=x^{3}-3x') && shown.includes('material-formulas'),
+    null,
+  );
+  check(
+    '公式区写明"本版不做排版"（不把源码冒充排版好的公式）',
+    shown.includes('本版不做排版'),
+  );
+
+  const noFormula: UiMaterial = { ...material, id: 'm-noformula', formulas: [] };
+  const empty = render(
+    '材料面板（图里确实没有公式）',
+    <MaterialPanel wb={makeWb({ materials: [noFormula] })} mock={false} />,
+  );
+  check('★ 图里没公式时中性说明"本次没有"', empty.includes('这张图里没有识别到公式'));
+  check('★ 并明确它不是"通道没接"', empty.includes('不是「公式通道没接」'));
+
+  const plain = render(
+    '材料面板（手打材料）',
+    <MaterialPanel wb={makeWb({ materials: [material] })} mock={false} />,
+  );
+  check(
+    '★ 手打材料对公式一个字都不说（`undefined` 与空数组是两回事）',
+    !plain.includes('没有识别到公式'),
+  );
 }
 
 {

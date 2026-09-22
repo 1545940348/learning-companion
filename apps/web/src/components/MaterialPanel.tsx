@@ -5,16 +5,20 @@
  * - 识别文本**默认可直接使用**，不设"请确认识别结果"的阻断步骤；
  * - 识别不准的地方标「识别可能不准」，学生可就地修改；
  * - 两种上传动作分开：「补充当前材料」保留旧材料与图谱，「开始新学习」另起会话；
- * - **图片入口已接入**（2026-09-21）：图片由**服务端**识别为文本后按普通材料提交，
- *   与文字材料走同一条下游管道；**语音入口仍未接入**，且识别将在**浏览器侧**发生，
- *   届时界面必须写明这一点（不得声称服务端具备语音识别）。
+ * - **图片入口已接入**（2026-09-21）：图片由**服务端**识别为文本后按普通材料提交；
+ * - **语音入口已接入**（2026-09-22）：语音由**浏览器**转成文字后填入输入框，
+ *   学生看一眼、可以就地改，再点「解析这份材料」才提交。
+ *   两条路径最后都变成**普通文本**，与手打材料走同一条下游管道。
+ *   ⚠️ 识别发生在浏览器、**不在服务端**（`D3`），界面必须写明这一点，
+ *   不得声称服务端具备语音识别能力。
  */
 
 import { useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { MATERIAL_LIMITS, MAX_VOICE_SECONDS } from '@lc/contracts';
+import { MATERIAL_LIMITS } from '@lc/contracts';
 import type { UiMaterial, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
 import { totalTextLength } from '../hooks/useWorkbench';
+import { VoiceInputButton } from './VoiceInputButton';
 
 type Props = { wb: WorkbenchState & WorkbenchActions; mock: boolean };
 
@@ -24,11 +28,21 @@ const PLACEHOLDER = `把讲义、题目或任何看不懂的段落粘贴到这�
 判断 f(x) 的单调性时，只需看 f'(x) 的符号：
 f'(x) > 0 时函数递增，f'(x) < 0 时函数递减。`;
 
-/** 尚未接入的识别通道 → 面向学生的说明（**不假装已解析**） */
+/**
+ * 尚未接入的识别通道 → 面向学生的说明（**不假装已解析**）。
+ *
+ * ⚠️ **不含 `formula`**（2026-09-22 修正）：公式**不是**"未接入的通道" ——
+ * 图片路径早已把 LaTeX 识别出来（只是原先被前端丢掉，见 `useWorkbench` 的 `formulas`），
+ * 而纯文字输入**压根没有"识别公式"这一环**。
+ * 把它列在这里的后果：纯文字输入**必然**显示「公式识别（LaTeX）未接入」，
+ * 图片里本来没有公式（纯叙述段落）时也显示 —— 两处都是假话（用户当场指正）。
+ *
+ * 约定（别再来一次）：**"能力有没有"用这张表说，"本次有没有结果"用材料条目上的说明说。**
+ * `image` 同理已接入，留在这里只为兼容更早的服务端快照（新响应不会再带它）。
+ */
 const UNAVAILABLE_TEXT: Record<string, string> = {
   image: '图片识别',
   audio: '语音转写',
-  formula: '公式识别（LaTeX）',
 };
 
 export function MaterialPanel({ wb, mock }: Props) {
@@ -36,7 +50,6 @@ export function MaterialPanel({ wb, mock }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLInputElement>(null);
 
   const used = totalTextLength(wb.materials);
   const parsing = wb.isBusy('knowledge');
@@ -64,16 +77,6 @@ export function MaterialPanel({ wb, mock }: Props) {
     if (fileRef.current) fileRef.current.value = '';
     if (!file) return;
     void wb.submitImage(file);
-  }
-
-  /** 语音入口：服务端不转写语音（识别在浏览器侧，属下一批工作），如实说明 */
-  function handleAudioPicked() {
-    if (audioRef.current) audioRef.current.value = '';
-    wb.notify(
-      '语音入口尚未接入：服务端不做语音转写。请把要问的内容打成文字 —— ' +
-        `文字路径是完整可用的（单段语音上限 ${MAX_VOICE_SECONDS} 秒）。`,
-      'warn',
-    );
   }
 
   const unavailable = wb.parseUnavailable.filter((item) => UNAVAILABLE_TEXT[item]);
@@ -112,9 +115,6 @@ export function MaterialPanel({ wb, mock }: Props) {
         <button className="btn btn-ghost" onClick={openImagePicker} disabled={wb.anyBusy}>
           上传图片
         </button>
-        <button className="btn btn-ghost" onClick={handleAudioPicked} disabled={wb.anyBusy}>
-          上传语音
-        </button>
         <input
           ref={fileRef}
           type="file"
@@ -122,7 +122,18 @@ export function MaterialPanel({ wb, mock }: Props) {
           hidden
           onChange={handleImagePicked}
         />
-        <input ref={audioRef} type="file" accept="audio/*" hidden onChange={handleAudioPicked} />
+        {/*
+          语音入口。识别结果**只填入输入框，不自动提交** —— 中文语音识别错字多，
+          直接提交会污染整份材料的图谱；学生看一眼、可就地改，再点「解析这份材料」。
+          （图片路径是自动提交的，两条路径在这点上不同，是有意为之，不是遗漏。）
+        */}
+        <VoiceInputButton
+          disabled={wb.anyBusy}
+          onTranscript={(text) =>
+            // 追加而不是覆盖：输入框里已有的内容不能被语音冲掉（`I14`：不静默丢内容）
+            setDraft((prev) => (prev.trim().length > 0 ? `${prev}\n${text}` : text))
+          }
+        />
         <span className="count">
           单次 {draft.length} / {MATERIAL_LIMITS.maxSingleInputLength} 字
         </span>
@@ -193,6 +204,28 @@ export function MaterialPanel({ wb, mock }: Props) {
                 ) : (
                   <p className="material-text">{renderText(item)}</p>
                 )}
+
+                {/*
+                  图片材料才有的公式区（`UiMaterial.formulas`，2026-09-22 接入）。
+                  **两种结果说法不同，不许混**：
+                  · 有公式 → 列出 LaTeX **源码**（本版不做排版渲染，故不引依赖）；
+                  · 空数组 → 说清"本次没找到"，并**明确指出这不是"通道没接"** ——
+                    否则学生（和评委）会把它读成功能缺失。
+                  手打材料是 `undefined`，这里一个字都不显示。
+                */}
+                {item.formulas !== undefined &&
+                  (item.formulas.length > 0 ? (
+                    <div className="material-formulas">
+                      <span>图片里识别到的公式（LaTeX 源码，本版不做排版）：</span>
+                      {item.formulas.map((latex, index) => (
+                        <code key={`formula-${index}`}>{latex}</code>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="hint-inline">
+                      这张图里没有识别到公式 —— 这是「本次」识别的结果，不是「公式通道没接」。
+                    </p>
+                  ))}
               </li>
             ))}
           </ul>

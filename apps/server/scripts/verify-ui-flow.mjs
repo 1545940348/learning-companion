@@ -55,10 +55,35 @@ check('① 新建会话 → 空图谱', session.graph.nodes.length === 0 && sess
 /* 2. 先过识别层（对应界面提交前调的 /api/parse），再提交材料 */
 const parsed = (await call('POST', '/api/parse', { text: materialText })).json;
 check('②a 识别接口可用，返回文本与低置信度字段', typeof parsed.text === 'string' && Array.isArray(parsed.lowConfidence));
+/*
+ * `unavailable` 是**能力级**字段（"这条通道接没接"），不是"本次有没有识别出东西"。
+ *
+ * 纯文字输入：语音这次没发（服务端确实不转写）、公式也不是未接入的通道（图片路径已接）
+ * ⇒ **一项都不该有**，字段整个不出现。
+ *
+ * ⚠️ 2026-09-22 修正前，这里断言的是 `parsed.unavailable.includes('formula')`
+ * —— 等于把"纯文字必然误报公式未接入"锁进了测试，所以它一直是绿的。
+ * 教训：断言要写**应该成立的口径**，不要照抄当时的实现行为。
+ */
 check(
-  '②a 未接入的识别通道如实报告（不用占位描述冒充已解析）',
-  Array.isArray(parsed.unavailable) && parsed.unavailable.includes('formula'),
+  '②a 纯文字输入不误报「未接入」（公式是能力已接，语音这次也没发）',
+  (parsed.unavailable ?? []).length === 0,
   parsed.unavailable,
+);
+
+/* ②a′ 反面用例：本次**真的**带了语音（服务端确实不转写）⇒ 必须如实列出 audio */
+const withAudio = (
+  await call('POST', '/api/parse', { text: '这段材料配了一段语音说明。', audioBase64: 'ZmFrZQ==' })
+).json;
+check(
+  '②a′ 本次带了语音 ⇒ 如实列出 audio（服务端不转写，是硬事实）',
+  Array.isArray(withAudio.unavailable) && withAudio.unavailable.includes('audio'),
+  withAudio.unavailable,
+);
+check(
+  '②a′ 且**只**列 audio —— 公式永不出现在「未接入」里（能力 ≠ 结果）',
+  JSON.stringify(withAudio.unavailable) === JSON.stringify(['audio']),
+  withAudio.unavailable,
 );
 
 const material = {

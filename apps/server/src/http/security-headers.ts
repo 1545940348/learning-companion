@@ -22,6 +22,23 @@
  *   有一层「访问提示中间页」，平台可能不在我方可控的响应里；更关键的是
  *   **HSTS 在 HTTP 下无意义且会把 http 站点锁死**，所以不能无条件发。
  *
+ * ### `microphone=(self)` 是**有意放行**，不是漏配（2026-09-22 线上定位后修改）
+ *
+ * 原先这里是 `microphone=()` —— 那是「**本站谁都不许用麦克风**」。后果不是"点了报个权限错误"
+ * 这么轻：浏览器**连授权弹窗都不会弹**，直接回 `not-allowed`。而界面上的文案还写着
+ * "去地址栏的权限提示里放行麦克风" —— 地址栏**根本不会出现那个图标**，
+ * 学生被引向一条做不了的路，看上去就是"语音功能坏了"。
+ *
+ * 界面上的「语音输入」走 `D3` 的**浏览器内置识别**
+ * （`apps/web/src/shared/lib/voice-support.ts`），确实需要麦克风权限，
+ * 因此这里放行**同源**（`self`）；**不放行任何第三方**（`microphone=*` 会让被嵌入的
+ * 任意页面也能要麦克风，不做）。其余四项（camera / geolocation / payment / usb）
+ * 本项目确实不用，维持空名单。
+ *
+ * 判据（可复用）：**"某条通道没接"要写在能力声明里**（`/api/health` 的 `capabilities`），
+ * **不能靠一个安全头把功能悄悄关掉** —— 关掉之后学生看到的错误原因全是错的。
+ * 副作用已评估：头的**条数不变**（仍是 7 条 + HSTS），变的只是 `microphone` 一项的值。
+ *
  * ### 与 CSP 相关的事实（2026-09-19 实测，见 `plans/2026-09-19-阶段0实施准备（可执行）.md` §0）
  *
  * 计划书标"上线前必须验证的三件事"已实测：构建产物**无内联脚本**、全仓 **0 处** `style={{}}`、
@@ -60,7 +77,10 @@ export const SECURITY_HEADERS: readonly (readonly [string, string])[] = [
   ['X-Content-Type-Options', 'nosniff'],
   ['X-Frame-Options', 'DENY'],
   ['Referrer-Policy', 'strict-origin-when-cross-origin'],
-  ['Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'],
+  // ⚠️ `microphone=(self)` 是**有意放行**：界面上的「语音输入」走浏览器内置识别，
+  //    需要麦克风权限。写成 `()` 会让浏览器**连授权弹窗都不弹**、直接回 not-allowed
+  //    （2026-09-22 线上实测踩过）。理由与副作用见文件头说明。
+  ['Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), payment=(), usb=()'],
   ['Cross-Origin-Opener-Policy', 'same-origin'],
   ['Cross-Origin-Resource-Policy', 'same-origin'],
 ];

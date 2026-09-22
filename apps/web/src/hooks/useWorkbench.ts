@@ -40,7 +40,20 @@ import { readImageFile } from '../shared/lib/image-input';
  *
  * `lowConfidence` 来自 `/api/parse`，用于标注"识别可能不准"（§2.2）。
  */
-export type UiMaterial = Material & { corrected?: boolean };
+export type UiMaterial = Material & {
+  corrected?: boolean;
+  /**
+   * 图片材料识别到的公式（LaTeX **源码**）。**纯界面字段，不进契约**（与 `corrected` 同理）。
+   *
+   * ⚠️ **只在图片材料上有值，并且允许为空数组** —— 这两种情况必须分开：
+   * - `undefined` = 没走图片路径（手打材料、纠错材料）⇒ 界面对公式**一个字都不该说**；
+   * - `[]` = 走了图片路径、识别成功，但**本次没找到公式** ⇒ 要说一句"这张图里没有识别到公式"，
+   *   并且**必须说清这不是"通道没接"**（2026-09-22 口径：能力 ≠ 结果）。
+   *
+   * 混成一个"没有公式"会让纯文字材料也收到一句莫名其妙的提示。
+   */
+  formulas?: string[];
+};
 
 /** 正在进行的动作。**门控按钮要用 `isBusy(key)`，不要用 `busy`**（见其注释） */
 export type ActionKey = 'knowledge' | 'gap' | 'tutor' | 'quiz' | 'profile';
@@ -468,6 +481,23 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
   /* ---------- 材料提交 / 图谱重建（§2.2、§2.4） ---------- */
 
   /**
+   * 剥掉**纯界面字段**再上行，保证发出去的载荷与契约里写的 `Material` 逐字一致。
+   *
+   * `corrected` / `formulas` 只活在界面上（契约里没有这两个字段）。服务端会忽略未知字段，
+   * 所以"顺手发过去"也能跑 —— 但那样"界面状态"与"线上载荷"就不是一套事实了，
+   * 而这类漂移正是本项目反复吃过亏的地方（`I14`）。显式列出字段，多一行，换一个确定。
+   */
+  function toWireMaterial(material: UiMaterial): Material {
+    return {
+      id: material.id,
+      kind: material.kind,
+      text: material.text,
+      ...(material.lowConfidence !== undefined ? { lowConfidence: material.lowConfidence } : {}),
+      createdAt: material.createdAt,
+    };
+  }
+
+  /**
    * 材料入库：调 `/api/knowledge`，并把返回的图谱 / 版本 / 材料同步进界面状态。
    *
    * **纯提取**（2026-09-21，自 `submitMaterials` 原样搬出，**行为不变**）：
@@ -476,8 +506,11 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
    * 因此只保留这一份，两个入口都调它；`submitMaterials` 只是少了一段内联代码。
    */
   const commitMaterialsToSession = useCallback(
-    async (id: string, incoming: Material[], versionAtRequest: number): Promise<boolean> => {
-      const result = await api.knowledge({ sessionId: id, materials: incoming });
+    async (id: string, incoming: UiMaterial[], versionAtRequest: number): Promise<boolean> => {
+      const result = await api.knowledge({
+        sessionId: id,
+        materials: incoming.map(toWireMaterial),
+      });
       if (!stillCurrent(versionAtRequest)) return false;
 
       setMaterials((previous) => [...previous, ...incoming]);
@@ -630,13 +663,27 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
 
         setParseUnavailable(parsed.unavailable ?? []);
 
-        const incoming: Material[] = [
+        /*
+         * 公式（LaTeX）**存下来**（2026-09-22，"省事路"）。
+         *
+         * 模型在图片路径上**早就在给** `formulas`（见 `apps/server/src/parse/vision.ts` 的
+         * `VISION_SYSTEM_PROMPT`），但这里原先只取 `parsed.text`，值被直接丢掉 ——
+         * 于是"公式识别"看上去像完全没接。现在按 LaTeX **源码**展示（不做排版渲染，
+         * 因此不引任何依赖，也不动 CSP）。
+         *
+         * ⚠️ **空数组也要存**：`[]`＝"识别成功、但本次没找到公式"，与 `undefined`
+         * （压根没走图片路径）在界面上说法不同，见 `UiMaterial.formulas` 的说明。
+         */
+        const formulas = (parsed.formulas ?? []).map((item) => item.latex);
+
+        const incoming: UiMaterial[] = [
           {
             id: newId(),
             kind: 'upload',
             text: recognized,
             // 识别可能不准的片段照常带上，界面会标出来（§2.2）
             ...(parsed.lowConfidence.length > 0 ? { lowConfidence: parsed.lowConfidence } : {}),
+            formulas,
             createdAt: new Date().toISOString(),
           },
         ];
