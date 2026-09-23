@@ -1530,6 +1530,11 @@ video {
 
 .shell-body > * {
   animation: view-in var(--dur-slow) var(--ease) both;
+  /*
+   * 内容少的面板也要撑满主区：教师视图「尚未读取」时只有两行，
+   * 不撑满会看着像"页面断了"（截图走查时发现的）。
+   */
+  min-height: 100%;
 }
 
 @keyframes view-in {
