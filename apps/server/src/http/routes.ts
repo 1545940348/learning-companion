@@ -44,6 +44,7 @@ import type {
   ProfileResponse,
   QuizResponse,
   Session,
+  SessionListResponse,
   SupplementBlock,
   TutorResponse,
   VerificationEngineStatus,
@@ -95,6 +96,7 @@ import {
   commitSupplement,
   createSession,
   getGraphNeighborhood,
+  listSessionSummaries,
   previewMaterials,
   requireSession,
 } from '../store/index.js';
@@ -242,6 +244,23 @@ export const apiRouter: Router = Router();
 apiRouter.post('/session', (_req, res) => {
   const session = createSession();
   res.status(201).json(session);
+});
+
+/**
+ * 列出会话摘要（`P2-1`，2026-09-23 新增）。
+ *
+ * ### 为什么只回摘要
+ *
+ * 见 `SessionSummary` 的注释：列表页不该顺带把**讲义原文**吐出来。
+ * 这里刻意**不做分页** —— 服务端是内存实现、单进程演示环境，会话量以个位计；
+ * 加一个用不上的分页参数只会制造"看起来完备"的错觉。
+ *
+ * ⚠️ **无入参、无需守卫**：接口不带 `sessionId`，因此不经过 `request-guards`。
+ * ⚠️ 进程重启后列表为空 —— 既定口径（§5.3），**不是故障**，界面侧应如实说明。
+ */
+apiRouter.get('/sessions', (_req, res) => {
+  const response: SessionListResponse = { sessions: listSessionSummaries() };
+  res.json(response);
 });
 
 apiRouter.get('/health', (_req, res) => {
