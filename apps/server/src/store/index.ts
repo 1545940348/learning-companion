@@ -20,6 +20,7 @@ import type {
   ProfileEvent,
   Session,
   SessionGraph,
+  SessionSummary,
   VerificationStatus,
   PrerequisiteStatus,
 } from '@lc/contracts';
@@ -51,6 +52,32 @@ export function createSession(): Session {
 
 export function getSession(id: string): Session | undefined {
   return sessions.get(id);
+}
+
+/**
+ * 列出全部会话的**摘要**，按 `updatedAt` 倒序（2026-09-23 新增，供 `GET /api/sessions`）。
+ *
+ * ### 关于"这个函数被删过又加回来"（`I19`）
+ *
+ * 2026-09-18 的全量复查把 `listSessions` 当作**死代码**删掉了 —— 当时它确实**没有任何调用点**。
+ * 现在它回来了，但**不是回潮**：它有了真实消费方（`routes.ts` 的 `GET /api/sessions`）
+ * 与真实断言（`verify:graph` 的摘要节 + `verify:flow` 的 HTTP 节）。
+ * 判据始终是"**有没有消费方**"，不是"看起来有没有用" —— 所以这次加得。
+ *
+ * ⚠️ 只回**元信息**：材料正文、图谱与补充块正文一律不进列表（见 `SessionSummary` 的注释）。
+ * ⚠️ 排序带 `id` 作为**平手时的次级键**：同一毫秒创建的两个会话否则顺序不定，
+ * 断言会偶发失败（"看起来像 flaky，其实是排序不确定"）。
+ */
+export function listSessionSummaries(): SessionSummary[] {
+  return [...sessions.values()]
+    .map((session) => ({
+      id: session.id,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      materialVersion: session.materialVersion,
+      materialCount: session.materials.length,
+    }))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
 }
 
 export function clearSessions(): void {

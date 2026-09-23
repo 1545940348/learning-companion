@@ -63,6 +63,30 @@ export interface Session {
   updatedAt: string;
 }
 
+/**
+ * 一个会话的**摘要** —— `GET /api/sessions` 的列表元素（2026-09-23 新增，**加性**）。
+ *
+ * ### 为什么不直接返回 `Session`
+ *
+ * 列表要回答的是"**有哪些会话**"，不是"这些会话里都写了什么"。
+ * 直接回 `Session` 会把**讲义原文**、图谱与补充块正文一并吐出来 ——
+ * 列表页不需要它们，而它们恰恰是最该少传的内容。
+ * 所以这里**只列元信息**，正文留在各自的详情接口（`GET /api/graph` 等）。
+ */
+export interface SessionSummary {
+  /** 会话 ID（`POST /api/session` 返回的那个） */
+  id: string;
+  createdAt: string;
+  /** 最后一次变更时间；列表按它**倒序** */
+  updatedAt: string;
+  materialVersion: number;
+  /**
+   * **学生自己提交的**材料份数（不含 AI 补充块 —— 补充块存在 `supplements` 里，两者分开存）。
+   * 轻路径会话为 `0`。
+   */
+  materialCount: number;
+}
+
 /** 素材上限，超出时提示缩短或开始新学习（说明书 V2.0 §2.2：5 份 / 15000 字） */
 export const MATERIAL_LIMITS = {
   maxMaterialsPerSession: 5,

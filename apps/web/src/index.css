@@ -979,3 +979,496 @@ video {
     flex-wrap: wrap;
   }
 }
+
+/* ==================== 应用外壳与对话流（L 档改造，2026-09-23） ====================
+
+   设计口径（对应 UI 要求：简洁 / 动效经典高级 / 少说明性小字 / 图标充分 / 双色不花哨）：
+
+   - **双色**：主色只用 `--accent`（墨绿）与中性灰阶；琥珀、砖红、蓝**只用于语义状态**
+     （警告 / 错误 / 信息），不做装饰色。所以整页看起来是"一主色 + 灰阶"，
+     状态色只在真需要报警时才出现。
+   - **动效经典**：`180ms` + `cubic-bezier(.22,.61,.36,1)`（ease-out，**不用弹跳/回弹**），
+     且只动 `background / color / border-color / transform / opacity` —— 不动布局属性，
+     否则会触发重排、在长列表里卡顿。
+   - **无障碍**：`prefers-reduced-motion` 下动效全部关闭；
+     选中态除颜色外还有 `aria-current="page"`（断言见 `verify-render` 第 9 节），
+     不靠"颜色深浅"单独表达状态。
+   ---------------------------------------------------------------------------- */
+
+:root {
+  --side-w: 236px;
+  --top-h: 53px;
+  --dur: 180ms;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --accent-ink: #0b5a46;
+  --accent-hover: rgba(15, 110, 86, 0.07);
+  --bg-blur: rgba(247, 247, 245, 0.86);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent-ink: #7ee0b8;
+    --accent-hover: rgba(93, 202, 165, 0.1);
+    --bg-blur: rgba(22, 22, 26, 0.88);
+  }
+}
+
+/* ---------- 壳 ---------- */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.shell-side {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px 18px;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.shell-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-top {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--top-h);
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-blur);
+  backdrop-filter: blur(10px);
+}
+
+.shell-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.shell-status {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.shell-body {
+  flex: 1;
+  min-width: 0;
+  padding: 16px 20px 40px;
+}
+
+.shell-banner {
+  margin: 12px 20px 0;
+}
+
+.icon {
+  flex: none;
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.icon-btn:hover {
+  background: var(--accent-hover);
+  color: var(--text);
+}
+
+/* ---------- 左栏 ---------- */
+
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 12px;
+  color: var(--accent-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.side-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.side-new:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--accent-hover);
+}
+.side-new:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.side-group {
+  margin-top: 18px;
+}
+
+.side-group-title {
+  padding: 0 10px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.side-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.side-item:hover {
+  background: var(--accent-hover);
+}
+.side-item-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 500;
+}
+
+.side-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-badge {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.side-sub {
+  padding: 4px 10px 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* 「本页说明」：四段如实标注收在这里（是**收纳**，不是删除） */
+.side-note {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.side-note summary {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+  transition: background var(--dur) var(--ease);
+}
+.side-note summary::-webkit-details-marker {
+  display: none;
+}
+.side-note summary::before {
+  content: '▸';
+  display: inline-block;
+  width: 12px;
+  transition: transform var(--dur) var(--ease);
+}
+.side-note[open] summary::before {
+  transform: rotate(90deg);
+}
+.side-note summary:hover {
+  background: var(--accent-hover);
+}
+.side-note-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 10px 0;
+}
+.side-note-body .footer-block {
+  padding: 0;
+  font-size: 12px;
+}
+
+/* ---------- 对话流 ---------- */
+
+.panel.conversation {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - var(--top-h) - 56px);
+  padding-bottom: 12px;
+}
+
+.conv-scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 6px 2px 16px;
+}
+
+.conv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 56px 16px 32px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.conv-empty .icon {
+  color: var(--accent);
+}
+.conv-empty-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.conv-samples {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 420px;
+  margin-top: 6px;
+}
+
+.sample {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.sample:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--accent-hover);
+}
+
+.msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  animation: msg-in var(--dur) var(--ease) both;
+}
+
+.msg-avatar {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  margin-top: 2px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.msg-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-user {
+  justify-content: flex-end;
+}
+.msg-user .msg-body {
+  flex: 0 1 auto;
+  max-width: 78%;
+  padding: 8px 12px;
+  border-radius: 12px 12px 4px 12px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.msg-mode {
+  margin-right: 6px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.msg-time {
+  align-self: flex-end;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ---------- 输入区（贴底） ---------- */
+
+.composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  margin-top: auto;
+  padding-top: 10px;
+  background: linear-gradient(to bottom, transparent, var(--card) 22%);
+}
+
+.composer-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.composer-status-spacer {
+  flex: 1;
+}
+
+.composer-input {
+  min-height: 52px;
+  resize: vertical;
+  background: var(--card);
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---------- 动效 ---------- */
+
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg,
+  .spin,
+  .side-item,
+  .side-new,
+  .sample,
+  .icon-btn,
+  .side-note summary::before {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ---------- 窄屏：左栏变抽屉 ---------- */
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell-side {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: 264px;
+    transform: translateX(-102%);
+    transition: transform var(--dur) var(--ease);
+  }
+  .shell.side-open .shell-side {
+    transform: none;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.16);
+  }
+  .shell-banner {
+    margin: 10px 12px 0;
+  }
+  .shell-body {
+    padding: 12px 12px 32px;
+  }
+  .conversation {
+    min-height: calc(100vh - var(--top-h) - 40px);
+  }
+}
+
+@media (min-width: 901px) {
+  /* 宽屏左栏常驻，"展开/收起"按钮没有意义 —— 不占地方 */
+  .shell-top .icon-btn {
+    display: none;
+  }
+}

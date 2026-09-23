@@ -7,7 +7,7 @@
  *   否则学生会以为点一下就等于材料覆盖了。
  */
 
-import type { WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
+import type { WorkbenchActions, WorkbenchState } from '../app/model/workbench-types';
 import { MISCONCEPTION_LABELS, STATUS_LABELS, statusClass } from '../shared/lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions };

@@ -22,23 +22,34 @@
 import * as React from 'react';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { GraphNeighborhood, LearnerProfile } from '@lc/contracts';
+import type { GraphNeighborhood, HealthResponse, LearnerProfile } from '@lc/contracts';
 import type {
   GapRecord,
   TutorTurn,
   UiMaterial,
   WorkbenchActions,
   WorkbenchState,
-} from '../src/hooks/useWorkbench';
+} from '../src/app/model/workbench-types';
 import { CLIENT_TIMEOUT_MS, describeAbort } from '../src/api';
-import { shouldOfferRetry } from '../src/hooks/useWorkbench';
+import { shouldOfferRetry } from '../src/app/model/notice';
 import { ErrorBoundary } from '../src/app/providers/ErrorBoundary';
 import { GraphPanel } from '../src/components/GraphPanel';
 import { KnowledgePanel } from '../src/components/KnowledgePanel';
 import { MaterialPanel } from '../src/components/MaterialPanel';
 import { ProfilePanel } from '../src/components/ProfilePanel';
 import { QuizPanel } from '../src/components/QuizPanel';
-import { TutorPanel } from '../src/components/TutorPanel';
+import { ConversationView } from '../src/components/ConversationView';
+import { AppShell } from '../src/components/AppShell';
+import { SidebarNav } from '../src/components/SidebarNav';
+import {
+  deriveSessionLabel,
+  describePending,
+  describeSession,
+  formatClock,
+  formatRelativeDay,
+  summarizeQuestion,
+  toChatMessages,
+} from '../src/app/model/conversation';
 import { VoiceInputButton } from '../src/components/VoiceInputButton';
 import type { SpeechRecognitionCtorLike } from '../src/shared/lib/voice-support';
 
@@ -117,6 +128,7 @@ function makeWb(overrides: Partial<WorkbenchState & WorkbenchActions> = {}): Wor
     isBusy: () => false,
     retryLastFailed: noop,
     focusNode: () => {},
+    cancelPending: () => 0,
     ...overrides,
   };
 }
@@ -377,12 +389,12 @@ console.log('\n--- 3. 答疑面板：mock 标记与验证状态 ---');
     at: new Date().toISOString(),
   };
 
-  const plain = render('答疑面板（真实通道）', <TutorPanel wb={makeWb({ history: [turn] })} mock={false} />);
+  const plain = render('答疑面板（真实通道）', <ConversationView wb={makeWb({ history: [turn] })} mock={false} />);
   check('回答块标出验证状态', plain.includes('未验证'));
   check('★ 真实通道不出现 mock 标记', !plain.includes('mock 演示数据'));
   check('标明是否基于材料', plain.includes('基于你的材料'));
 
-  const mocked = render('答疑面板（mock 通道）', <TutorPanel wb={makeWb({ history: [turn] })} mock />);
+  const mocked = render('答疑面板（mock 通道）', <ConversationView wb={makeWb({ history: [turn] })} mock />);
   check('★ mock 通道下每条回答带「mock 演示数据」标记', mocked.includes('mock 演示数据'), null);
 
   // I14：被来源校验拦下的块必须如实告知，不得无声消失
@@ -396,7 +408,7 @@ console.log('\n--- 3. 答疑面板：mock 标记与验证状态 ---');
   };
   const withDrop = render(
     '答疑面板（有块被校验丢弃，I14）',
-    <TutorPanel wb={makeWb({ history: [dropped] })} mock={false} />,
+    <ConversationView wb={makeWb({ history: [dropped] })} mock={false} />,
   );
   check('★ 被拒块的丢弃事实被显示出来', withDrop.includes('本次回答不完整'), null);
   check(
@@ -891,6 +903,253 @@ console.log('\n--- 8. ErrorBoundary 与请求中止（阶段 0 卡 2 / 卡 3） 
     '★ 超时与取消的文案不同（混成一句话就无法区分"我的操作失败了"与"我自己按的")',
     timeout.text !== cancelled.text,
     { timeout: timeout.text, cancelled: cancelled.text },
+  );
+}
+
+/* ==================== 9. 外壳与对话模型（L 档改造，2026-09-23） ==================== */
+
+console.log('\n--- 9. 外壳与对话模型：左栏切换、消息正序、时间与标签 ---');
+{
+  const mkTurn = (id: string, question: string): TutorTurn => ({
+    id,
+    question,
+    mode: 'hint',
+    answer: { scope: 'in-material', basedOnMaterial: true, blocks: [] },
+    stale: false,
+    at: '2026-09-23T04:05:00.000Z',
+  });
+
+  const fakeHealth = {
+    version: '0.1.0',
+    modelProvider: 'mock',
+    mock: true,
+    verification: { available: true, engine: 'mathjs' },
+  } as unknown as HealthResponse;
+
+  /**
+   * 当前选中的是哪个视图 —— 判据是**同一个 `<button>` 标签内**的 `data-view`：
+   * 既不依赖属性顺序，也不依赖标签文字（「对话」项的标签是**会话标题**，会随状态变）。
+   */
+  function activeView(markup: string): string | null {
+    const button = /<button[^>]*side-item-active[^>]*>/.exec(markup)?.[0] ?? '';
+    return /data-view="([a-z]+)"/.exec(button)?.[1] ?? null;
+  }
+
+  /* --- 9a 左栏：功能/对话两类入口齐全，选中态可验证 --- */
+  const navChat = render(
+    '左栏（对话视图选中）',
+    <SidebarNav wb={makeWb({ materials: [material] })} view="chat" onViewChange={() => {}} />,
+  );
+  check(
+    '★ 五个功能入口的文字标签都在（不是只有图标）',
+    ['材料', '知识点', '图谱', '练习', '画像'].every((label) => navChat.includes(label)),
+    undefined,
+  );
+  check('★ 选中项带 aria-current="page"（不只靠颜色表达选中）', navChat.includes('aria-current="page"'));
+  check(
+    '★ 同时只有一项是选中态',
+    [...navChat.matchAll(/aria-current="page"/g)].length === 1,
+    [...navChat.matchAll(/aria-current="page"/g)].length,
+  );
+  check('★ 选中项就是对话视图', activeView(navChat) === 'chat', activeView(navChat));
+
+  const navMaterial = render(
+    '左栏（材料视图选中）',
+    <SidebarNav wb={makeWb()} view="material" onViewChange={() => {}} />,
+  );
+  check(
+    '★ 切到材料视图后选中态跟着走（不是写死在第一项）',
+    activeView(navMaterial) === 'material',
+    activeView(navMaterial),
+  );
+  check('★ 数字为 0 时不显示徽标（不用"0"凑数）', !navMaterial.includes('side-badge'));
+
+  const navBadge = render(
+    '左栏（材料 1 份）',
+    <SidebarNav wb={makeWb({ materials: [material] })} view="chat" onViewChange={() => {}} />,
+  );
+  check('★ 徽标显示真实数字（材料 1 份 → 徽标 1）', /side-badge">1</.test(navBadge), undefined);
+
+  /* --- 9b 对话模型：纯函数真值表 --- */
+  const ordered = toChatMessages([mkTurn('1', '第一个问题'), mkTurn('2', '第二个问题')]);
+  check('★ 消息条数 = 历史 × 2（一问一答）', ordered.length === 4, ordered.length);
+  check(
+    '★ 消息是正序：第一个问题在最前（对话流"新的在下"）',
+    ordered[0]?.kind === 'user' && (ordered[0] as { text?: string }).text === '第一个问题',
+    ordered[0],
+  );
+  check(
+    '★ 最后两条是第二个问题的问答（顺序反了就成了旧版那样"新的在上"）',
+    (ordered[2] as { text?: string }).text === '第二个问题' && ordered[3]?.kind === 'answer',
+    ordered.slice(2),
+  );
+
+  const longQuestion = '为什么导数大于零就说明函数单调递增这件事需要证明吗';
+  check(
+    '★ 长问题压成一行标题（max + 省略号）',
+    summarizeQuestion(longQuestion, 10) === `${longQuestion.slice(0, 10)}…`,
+    summarizeQuestion(longQuestion, 10),
+  );
+  check('★ 换行折成空格（左栏一行放不下多行标题）', summarizeQuestion('第一行\n第二行') === '第一行 第二行');
+
+  check('★ 非法时间不产生 NaN', formatClock('not-a-date') === '', formatClock('not-a-date'));
+  const now = new Date('2026-09-23T12:00:00');
+  check('★ 今天的标「今天」', formatRelativeDay('2026-09-23T09:00:00', now) === '今天');
+  check('★ 昨天的标「昨天」', formatRelativeDay('2026-09-22T23:59:00', now) === '昨天');
+  check(
+    '★ 更早的标日期（按自然日算，不是"距今 N 小时"）',
+    formatRelativeDay('2026-09-20T10:00:00', now) === '9月20日',
+    formatRelativeDay('2026-09-20T10:00:00', now),
+  );
+
+  check(
+    '★ 没有历史也没有材料时叫「新对话」（不编一个像模像样的名字）',
+    deriveSessionLabel({ history: [], materials: [], sessionId: null }) === '新对话',
+  );
+  check(
+    '★ 有历史时用第一个问题当标题',
+    deriveSessionLabel({ history: [mkTurn('1', '切线怎么求')], materials: [], sessionId: 's-1' }) ===
+      '切线怎么求',
+  );
+  check(
+    '★ 只有材料时用材料首句当标题',
+    deriveSessionLabel({ history: [], materials: [{ text: '本节讲导数' }], sessionId: 's-1' }) ===
+      '本节讲导数',
+  );
+  check(
+    '★ 没有会话时如实写「轻路径」（不写成"会话 1"）',
+    describeSession({ sessionId: null, materialVersion: 0, materials: [], history: [] }).includes(
+      '轻路径',
+    ),
+  );
+  const sub = describeSession({
+    sessionId: 's-1',
+    materialVersion: 2,
+    materials: [{ text: 'x' }],
+    history: [mkTurn('1', 'q')],
+  });
+  check('★ 会话摘要报真实的份数与条数', sub.includes('材料 1 份') && sub.includes('问答 1 条'), sub);
+
+  check('★ 没有动作在进行时不显示"正在…"', describePending(null) === null);
+  check(
+    '★ 每个动作都有对应的中文说法（不留 undefined）',
+    ['knowledge', 'gap', 'tutor', 'quiz', 'profile'].every(
+      (key) => typeof describePending(key) === 'string',
+    ),
+  );
+
+  /* --- 9c 对话视图：空态与顺序 --- */
+  const empty = render('对话视图（空态）', <ConversationView wb={makeWb()} mock={false} />);
+  check(
+    '★ 空态给的是可点的示例问题，而不是一段说明文字',
+    empty.includes('问一个微积分问题') && empty.includes('切线方程是怎么求出来的？'),
+  );
+  check('★ 空态不再出现"还没有问答记录"这类说明性小字', !empty.includes('还没有问答记录'));
+
+  const conv = render(
+    '对话视图（一条问答）',
+    <ConversationView wb={makeWb({ history: [mkTurn('1', '切线怎么求')] })} mock={false} />,
+  );
+  check(
+    '★ 提问在上、回答在下（与旧版的倒序展示相反）',
+    conv.indexOf('切线怎么求') < conv.indexOf('msg-answer'),
+    { q: conv.indexOf('切线怎么求'), a: conv.indexOf('msg-answer') },
+  );
+  check('★ 输入区在对话流里（不是另一个面板）', conv.includes('composer-input'));
+  check(
+    '★ 回答模式的三个入口仍在（文案与 labels.ts 一致，不是另造新词）',
+    ['给我提示', '解释概念', '查看完整解答'].every((text) => conv.includes(text)),
+  );
+
+  /* --- 9d 外壳：布局、真实性标注、提示位置 --- */
+  const shell = render(
+    '外壳（mock 通道 + 子内容）',
+    <AppShell
+      health={fakeHealth}
+      healthError={null}
+      wb={makeWb({ materials: [material] })}
+      view="chat"
+      onViewChange={() => {}}
+      sideOpen={false}
+      onToggleSide={() => {}}
+    >
+      <div>CHILD-MARK</div>
+    </AppShell>,
+  );
+  check('★ 子内容进主区', shell.includes('CHILD-MARK'));
+  check('★ 左栏与主区同时存在', shell.includes('class="side"') && shell.includes('shell-main'));
+  check('★ mock 通道横幅保留（改版不许把它弄丢）', shell.includes('当前是 mock 演示通道'));
+  check(
+    '★ 四段如实标注仍在 DOM 里（只是收进「本页说明」折叠区，不是删掉）',
+    ['本页说明', '本页尚未接入', '语音识别发生在哪里', '符号验证的边界'].every((text) =>
+      shell.includes(text),
+    ),
+    undefined,
+  );
+  check('★ 折叠区默认收起（`<details>` 不带 open）', !/class="side-note"[^>]*open/.test(shell));
+  const notImplemented = /本页尚未接入<\/strong><span>([\s\S]*?)<\/span>/.exec(shell)?.[1] ?? '';
+  check(
+    '★ 未接入清单里不再出现「图片」「语音」（V1.2/V1.3 修过的口径不许回退）',
+    notImplemented.length > 0 && !notImplemented.includes('图片') && !notImplemented.includes('语音'),
+    notImplemented.slice(0, 40),
+  );
+
+  const shellBusy = render(
+    '外壳（正在处理中）',
+    <AppShell
+      health={fakeHealth}
+      healthError={null}
+      wb={makeWb({ anyBusy: true, busy: 'tutor' })}
+      view="graph"
+      onViewChange={() => {}}
+      sideOpen={false}
+      onToggleSide={() => {}}
+    >
+      <div>CHILD-MARK</div>
+    </AppShell>,
+  );
+  check(
+    '★ 处理中提示在主区顶部（非对话视图也能看到，不会只活在对话流里）',
+    shellBusy.includes('notice-info') && shellBusy.includes('正在处理中'),
+  );
+  check('★ 正在处理时给「取消」（长任务不该只能干等）', shellBusy.includes('取消'));
+
+  const shellRetry = render(
+    '外壳（失败且可重试）',
+    <AppShell
+      health={fakeHealth}
+      healthError={null}
+      wb={makeWb({ notice: { kind: 'error', text: '模型调用失败', retryable: true }, canRetry: true })}
+      view="chat"
+      onViewChange={() => {}}
+      sideOpen={false}
+      onToggleSide={() => {}}
+    >
+      <div>CHILD-MARK</div>
+    </AppShell>,
+  );
+  check('★ 可重试的失败才挂「重试」', shellRetry.includes('重试'));
+
+  const shellNoRetry = render(
+    '外壳（失败但不可重试）',
+    <AppShell
+      health={fakeHealth}
+      healthError={null}
+      wb={makeWb({
+        notice: { kind: 'error', text: '提交失败了', retryable: false },
+        canRetry: true,
+      })}
+      view="chat"
+      onViewChange={() => {}}
+      sideOpen={false}
+      onToggleSide={() => {}}
+    >
+      <div>CHILD-MARK</div>
+    </AppShell>,
+  );
+  check(
+    '★ 不可重试的失败不挂按钮（I20⑤：有 canRetry 但没有 retryable 时不许挂）',
+    !shellNoRetry.includes('重试'),
   );
 }
 

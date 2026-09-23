@@ -11,7 +11,7 @@ import type {
   PrerequisiteStatus,
   VerificationStatus,
 } from './knowledge.js';
-import type { LowConfidenceSpan, Material } from './session.js';
+import type { LowConfidenceSpan, Material, SessionSummary } from './session.js';
 import type { QuizItem, QuizSource, Topic } from './quiz.js';
 import type { ProfileRequest, ProfileResponse, TeacherResponse } from './profile.js';
 
@@ -48,6 +48,18 @@ export interface ApiErrorBody {
 /* ============ POST /api/session ============ */
 
 /* 响应即 Session（见 session.ts），materialVersion=0、graph 为空图谱 */
+
+/* ============ GET /api/sessions ============ */
+
+/**
+ * 会话列表（2026-09-23 新增，**加性**）：只回**摘要**，不回材料正文与图谱。
+ *
+ * 顺序由服务端定：按 `updatedAt` **倒序**（最近变更的在前）。
+ * ⚠️ 服务端是**内存实现**，进程重启后列表为空 —— 这是既定口径（§5.3），不是故障。
+ */
+export interface SessionListResponse {
+  sessions: SessionSummary[];
+}
 
 /* ============ GET /api/health ============ */
 

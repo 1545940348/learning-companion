@@ -376,5 +376,39 @@ check(
   { actual: healthBody?.version ?? null, expected: serverPkgVersion },
 );
 
+/* ==================== GET /api/sessions（2026-09-23 新增，P2-1） ==================== */
+
+console.log('\n=== 会话列表：列出会话、只回摘要 ===\n');
+{
+  const list = await call('GET', '/api/sessions');
+  check('★ GET /api/sessions → 200', list.status === 200, list.status);
+  check('返回 sessions 数组', Array.isArray(list.json.sessions));
+
+  const mine = list.json.sessions.find((item) => item.id === session.id);
+  check('★ 提交过材料的会话出现在列表里', mine !== undefined);
+  check('★ 材料份数与真实提交一致（1 份）', mine?.materialCount === 1, mine?.materialCount);
+  check(
+    '材料版本与 GET /api/graph 读回的一致（同一份事实，不各说各话）',
+    mine?.materialVersion === graphAfter.materialVersion,
+    { list: mine?.materialVersion, graph: graphAfter.materialVersion },
+  );
+
+  const empty = list.json.sessions.find((item) => item.id === emptySession.id);
+  check(
+    '★ 轻路径会话也在列表里，且如实报 0 份材料',
+    empty?.materialCount === 0,
+    empty?.materialCount,
+  );
+
+  check(
+    '★★ 列表里不出现材料正文（"只回摘要"的端到端证据）',
+    !JSON.stringify(list.json).includes(materialText),
+  );
+  check(
+    '★★ 列表里不出现图谱节点内容',
+    !JSON.stringify(list.json).includes(graphAfter.nodes[0]?.id ?? '__no-node__'),
+  );
+}
+
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);
 process.exitCode = failed > 0 ? 1 : 0;

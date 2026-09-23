@@ -33,6 +33,7 @@ import {
   getGraphNeighborhood,
   getProfile,
   getSession,
+  listSessionSummaries,
 } from '../src/store/index.js';
 import { defaultStatusForApiCode, isRetryableApiCode } from '../src/http/error-response.js';
 import { createMockAdapter } from '../src/model/index.js';
@@ -394,6 +395,65 @@ console.log('\n=== 6. 教学模块归一：验证状态、自依赖与循环依�
   check('★ 非法 scope 不原样透传，落到 partial', result.scope === 'partial', result.scope);
   check('★ 回答块缺 verification 时落 unverified', result.blocks[0].verification === 'unverified');
   check('零材料时 basedOnMaterial 为 false', result.basedOnMaterial === false);
+}
+
+/* ==================== 会话摘要列表（GET /api/sessions，2026-09-23） ==================== */
+
+console.log('\n=== 会话摘要：只列元信息、排序确定、不泄露正文 ===\n');
+{
+  /*
+   * 这一节锁三件事，缺一件就等于没测：
+   * ① 摘要字段取自**真实会话**（不是现编的常量）；② 排序**确定**（同毫秒创建时有 id 作次级键，
+   * 否则断言会偶发失败 —— "看起来像 flaky，其实是排序不确定"）；
+   * ③ **列表里不出现材料正文与图谱内容** —— 这是"只回摘要"那条口径唯一的可执行证据。
+   */
+  const SECRET = '讲义原文里的独特字样-ZZQ-不应出现在列表里';
+
+  clearSessions();
+  check('★ 空 store 时列表是空数组（不是 null、也不抛错）', listSessionSummaries().length === 0);
+
+  const first = createSession();
+  commitMaterials(first.id, [material('m1', SECRET)], 0, {
+    nodes: [point('derivative')],
+    edges: [],
+  });
+  const second = createSession();
+
+  const summaries = listSessionSummaries();
+  check('两个会话都在列表里', summaries.length === 2);
+  check(
+    '★ 摘要有全部约定字段（缺一个前端就渲染不出那一行）',
+    ['id', 'createdAt', 'updatedAt', 'materialVersion', 'materialCount'].every(
+      (key) => summaries[0][key] !== undefined,
+    ),
+  );
+
+  const withMaterial = summaries.find((item) => item.id === first.id);
+  check('★ 材料份数取自真实会话（1 份）', withMaterial?.materialCount === 1);
+  check('材料版本随提交递增（1）', withMaterial?.materialVersion === 1);
+  check(
+    '★ 轻路径会话报 0 份材料（AI 补充块不计入"学生材料"）',
+    summaries.find((item) => item.id === second.id)?.materialCount === 0,
+  );
+
+  check(
+    '★★ 列表里**不出现材料正文**（"只回摘要"的唯一可执行证据）',
+    !JSON.stringify(summaries).includes(SECRET),
+  );
+  check(
+    '★★ 列表里也不出现图谱内容（同一口径的另一半）',
+    !JSON.stringify(summaries).includes('derivative'),
+  );
+
+  const again = listSessionSummaries();
+  check(
+    '★ 排序确定：同一状态连查两次顺序一致（否则断言会偶发失败）',
+    JSON.stringify(again.map((item) => item.id)) === JSON.stringify(summaries.map((item) => item.id)),
+  );
+  check(
+    '★ 最近变更的排在前面（`updatedAt` 倒序）',
+    summaries[0].updatedAt >= summaries[1].updatedAt,
+  );
 }
 
 /* ==================== 汇总 ==================== */

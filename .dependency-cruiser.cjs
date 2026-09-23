@@ -15,11 +15,12 @@
  * - `no-circular`：**已于 2026-09-20（`W0-5`/`I38`）清零点，故即转 `error`**。
  *   转之前先确认它"有牙齿"（当时确实报出 `deepseek.ts ↔ model/index.ts` 的环，
  *   命令退出码非 0），拆环后再确认转绿 —— 一次真正的红 → 绿。
- * - `panels-should-not-import-state-internals`：**保持 `warn`**。
- *   存量是 6/6 面板 → `hooks/useWorkbench`（计划书 `D-05`，属阶段 1–4 的活）。
- *   ⚠️ 它"自然变空"的时点是**阶段 4**（计划书 §14.5 ④），不是阶段 1：
- *   阶段 1 只搬路径、不减耦合，届时**必须同批**把本规则的 `from`/`to` 改写成新路径，
- *   否则转 error 得到的是一个**匹配不到任何模块的门禁**（判据失去分辨力）。
+ * - `panels-should-not-import-state-internals`：**2026-09-23 清零并转 `error`**（比计划书预估提前）。
+ *   原判断是"它要到阶段 4 才自然变空"—— 但**类型与纯函数本就不属于状态层**：
+ *   把类型搬到 `apps/web/src/app/model/workbench-types.ts`、把 `shouldOfferRetry` /
+ *   `totalTextLength` 搬到 `app/model/{notice,materials}.ts` 之后，这条**当场**就空了。
+ *   教训：`D-05` 把它算成"阶段 4 的活"，是按**目录搬迁**算的；
+ *   按**依赖方向**算，它是可以立刻修的 —— 这也是本轮 L 档改造的附带收益。
  * - `shared-must-not-depend-upwards`：保持 `warn`（存量已清零，待确认后转）。
  *
  * ### 为什么用 CJS（`.cjs`）
@@ -53,11 +54,13 @@ module.exports = {
     {
       name: 'panels-should-not-import-state-internals',
       comment:
-        '计划书 D-05：6/6 面板直接 `import type ... from "../hooks/useWorkbench"`，' +
-        '依赖方向与"分层"相反（presentation → state internals）。' +
-        '**阶段 0 预期会报出来**（这是存量问题，属阶段 1–4 修）；' +
-        '它的价值在于阶段 4 改完后这条会自然变空，届时转 error 即为门禁。',
-      severity: 'warn',
+        '计划书 D-05：面板不得 import 状态层内部（presentation → state internals 是反方向）。' +
+        '**2026-09-23 已清零并转 error** —— 类型搬到 `apps/web/src/app/model/workbench-types.ts`、' +
+        '纯函数搬到 `app/model/{notice,materials}.ts`，面板不再穿透到 `hooks/`。' +
+        '转 error 前做过红/绿验证：临时在 `MaterialPanel.tsx` 加回一句' +
+        '`import type { WorkbenchState } from "../hooks/useWorkbench"` → 本条如实报 error 且退出码非 0；' +
+        '去掉后回到 0 violations。',
+      severity: 'error',
       from: { path: '^apps/web/src/components/' },
       to: { path: '^apps/web/src/hooks/' },
     },
