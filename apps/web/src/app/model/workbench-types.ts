@@ -18,6 +18,7 @@
  */
 
 import type {
+  AccountInfo,
   ClassAggregate,
   GraphNeighborhood,
   KnowledgePoint,
@@ -39,7 +40,7 @@ import type {
  * 沿用本文件的定位（"类型的单一出口"）：面板不必各自去 `@lc/contracts` 里挑，
  * 也不会出现"同一个类型两处各引一份"。
  */
-export type { ClassAggregate };
+export type { AccountInfo, ClassAggregate };
 
 /**
  * 界面上的一份材料。
@@ -65,7 +66,15 @@ export type UiMaterial = Material & {
 };
 
 /** 正在进行的动作。**门控按钮要用 `isBusy(key)`，不要用 `busy`**（见其注释） */
-export type ActionKey = 'knowledge' | 'gap' | 'tutor' | 'quiz' | 'profile' | 'teacher';
+export type ActionKey =
+  | 'knowledge'
+  | 'gap'
+  | 'tutor'
+  | 'quiz'
+  | 'profile'
+  | 'teacher'
+  /** 账号相关（登录 / 登出 / 读身份）—— 共用一个门控键 */
+  | 'auth';
 
 /**
  * 教师视图用的班级 id（`P-A6`，2026-09-23）。
@@ -87,7 +96,9 @@ export type FailedAction =
   | { kind: 'gap'; conceptId: string; reason: string }
   | { kind: 'tutor'; question: string; mode: TutorMode }
   | { kind: 'profile' }
-  | { kind: 'teacher' };
+  | { kind: 'teacher' }
+  /** 账号操作失败：**主要给"上次失败可重试"的提示用**，登录表单自身也会就地报错 */
+  | { kind: 'auth' };
 
 /** 一次缺口补充的结果，按 conceptId 归档（§3.4） */
 export interface GapRecord {
@@ -171,6 +182,11 @@ export interface WorkbenchState {
    * 不跟当前会话的生命周期走 —— 它是**跨会话**的视图，绑在某个会话上没有意义。
    */
   teacher: ClassAggregate | null;
+  /**
+   * 当前登录的账号（`null` = 未登录）。演示级：**未登录也能正常用学习工作台** ——
+   * 账号只影响"用户页显示什么"与"能不能进教师端"，不是使用前提。
+   */
+  account: AccountInfo | null;
   notice: Notice | null;
   /**
    * 最近**开始**的动作，仅用于显示"正在…"的文案。
@@ -251,6 +267,21 @@ export interface WorkbenchActions {
    * 不假装有组织关系。
    */
   fetchTeacher: () => Promise<void>;
+
+  /* ---------- 账号（演示级，`D7` 口径；2026-09-23） ---------- */
+
+  /**
+   * 启动时读一次身份。
+   *
+   * 服务端令牌是**内存态**的 ⇒ 重启后这里会拿到 `null`，界面据此回到未登录态并
+   * **如实说明**"服务端已重启，需要重新登录"，而不是静默失败。
+   */
+  loadMe: () => Promise<void>;
+
+  /** 登录。返回是否成功（失败原因由 hook 写进 `notice`，表单只需知道成没成） */
+  login: (username: string, password: string) => Promise<boolean>;
+
+  logout: () => Promise<void>;
   startNewStudy: () => Promise<void>;
   /**
    * 切换到**本标签页归档过的**某个会话（`P2-2`，2026-09-23）。

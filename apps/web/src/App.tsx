@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import type { HealthResponse } from '@lc/contracts';
 import { api } from './api';
 import { AppShell } from './components/AppShell';
+import { AccountView } from './components/AccountView';
 import { ConversationView } from './components/ConversationView';
 import { GraphPanel } from './components/GraphPanel';
 import { KnowledgePanel } from './components/KnowledgePanel';
@@ -42,6 +43,12 @@ export function App() {
       .catch((error: unknown) => {
         setHealthError(error instanceof Error ? error.message : '无法连接服务端');
       });
+    /*
+     * 读一次登录身份（演示级账号，2026-09-23）。
+     * ⚠️ 它**不阻塞首屏**：未登录也能用学习工作台，所以这里只是"顺带问一下"。
+     */
+    void wb.loadMe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在挂载时问一次，不跟 wb 变
   }, []);
 
   const mock = health?.mock === true;
@@ -50,6 +57,14 @@ export function App() {
     setView(next);
     /* 抽屉形态下选完即收，省一次点击 */
     setSideOpen(false);
+  }
+
+  /*
+   * 用户页是**独立一页**：先于 `AppShell` 分支返回，因此不套左栏与主区布局。
+   * 理由见 `AccountView` 的注释（"学习动作"与"账号"不是一类东西）。
+   */
+  if (view === 'account') {
+    return <AccountView wb={wb} onBack={() => handleViewChange('chat')} />;
   }
 
   return (

@@ -43,6 +43,8 @@ import type {
   PrerequisiteStatus,
   ProfileResponse,
   QuizResponse,
+  LoginResponse,
+  MeResponse,
   Session,
   SessionListResponse,
   SupplementBlock,
@@ -88,6 +90,7 @@ import {
   type Guard,
 } from './request-guards.js';
 import { buildDroppedBlocks } from './student-reason.js';
+import { authenticate, issueToken, resolveToken, revokeToken } from '../auth/index.js';
 import {
   SessionNotFoundError,
   SessionVersionConflictError,
@@ -778,6 +781,63 @@ apiRouter.post(
     const profile = commitProfileEvents(session, events);
 
     const response: ProfileResponse = profile;
+    res.json(response);
+  }),
+);
+
+/* ==================== 账号（演示级，`D7` 口径；2026-09-23） ==================== */
+
+/**
+ * 令牌从 **`X-LC-Token` 请求头**取，**不用 Cookie**。
+ *
+ * 这样浏览器就不会自动附带它 ⇒ **不存在 CSRF 面**。
+ * 计划书要求"归属校验 ＋ CSRF 必须同批上线"，这里靠"取消 Cookie"让后半句自动成立 ——
+ * 比加一个防不住的 CSRF token 更实在。
+ *
+ * 参数用结构化类型（只要求有 `header`），省掉对 `express` 类型的耦合。
+ */
+function tokenOf(req: { header: (name: string) => string | undefined }): string | undefined {
+  const value = req.header('x-lc-token');
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+apiRouter.post(
+  '/auth/login',
+  asyncHandler(async (req, res) => {
+    const body = await readBody(req);
+    const username = unwrap(guardNonEmptyText(body.username, 'username'));
+    const password = unwrap(guardNonEmptyText(body.password, 'password'));
+
+    const account = authenticate(username, password);
+    if (!account) {
+      /*
+       * ⚠️ 失败原因**不区分**"用户不存在"与"口令不正确" ——
+       * 区分开就等于提供了一个**账号枚举接口**。
+       */
+      throw new ApiError('UNAUTHORIZED', '用户名或口令不正确。');
+    }
+    const response: LoginResponse = { token: issueToken(account), account };
+    res.json(response);
+  }),
+);
+
+apiRouter.post(
+  '/auth/logout',
+  asyncHandler(async (req, res) => {
+    revokeToken(tokenOf(req));
+    res.json({ ok: true });
+  }),
+);
+
+apiRouter.get(
+  '/auth/me',
+  asyncHandler(async (req, res) => {
+    /*
+     * ⚠️ **未登录时返回 200 ＋ `account: null`，不是 401** ——
+     * "还没登录"是**正常状态**（首屏就该能提问），不是错误。
+     * 返 401 会让前端把例行查询当失败、弹出无意义的重试。
+     */
+    const response: MeResponse = { account: resolveToken(tokenOf(req)) };
     res.json(response);
   }),
 );
