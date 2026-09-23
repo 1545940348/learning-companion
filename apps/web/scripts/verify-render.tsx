@@ -26,12 +26,19 @@ import type { GraphNeighborhood, HealthResponse, LearnerProfile } from '@lc/cont
 import type {
   GapRecord,
   TutorTurn,
+  SessionHistoryEntry,
   UiMaterial,
   WorkbenchActions,
   WorkbenchState,
 } from '../src/app/model/workbench-types';
 import { CLIENT_TIMEOUT_MS, describeAbort } from '../src/api';
 import { shouldOfferRetry } from '../src/app/model/notice';
+import {
+  parseEntries,
+  removeEntry,
+  trimTurns,
+  upsertEntry,
+} from '../src/app/model/session-history';
 import { ErrorBoundary } from '../src/app/providers/ErrorBoundary';
 import { GraphPanel } from '../src/components/GraphPanel';
 import { KnowledgePanel } from '../src/components/KnowledgePanel';
@@ -112,6 +119,7 @@ function makeWb(overrides: Partial<WorkbenchState & WorkbenchActions> = {}): Wor
     canRetry: false,
     parseUnavailable: [],
     focusedNodeId: null,
+    historyEntries: [],
     submitMaterials: asyncTrue,
     correctMaterial: noop,
     supplementGap: noop,
@@ -122,6 +130,7 @@ function makeWb(overrides: Partial<WorkbenchState & WorkbenchActions> = {}): Wor
     refreshGraph: noop,
     fetchProfile: noop,
     startNewStudy: noop,
+    switchSession: noop,
     dismissNotice: () => {},
     notify: () => {},
     ensureMaterialSession: async () => 's-1',
@@ -1151,6 +1160,120 @@ console.log('\n--- 9. 外壳与对话模型：左栏切换、消息正序、时�
     '★ 不可重试的失败不挂按钮（I20⑤：有 canRetry 但没有 retryable 时不许挂）',
     !shellNoRetry.includes('重试'),
   );
+}
+
+/* ==================== 10. 会话归档（P2-2，2026-09-23） ==================== */
+
+console.log('\n--- 10. 会话归档：上限、排序确定、容错、左栏历史 ---');
+{
+  const mkTurn = (id: string, question: string): TutorTurn => ({
+    id,
+    question,
+    mode: 'hint',
+    answer: { scope: 'in-material', basedOnMaterial: true, blocks: [] },
+    stale: false,
+    at: '2026-09-23T04:05:00.000Z',
+  });
+
+  const entry = (id: string, updatedAt: string, turns = 0): SessionHistoryEntry => ({
+    sessionId: id,
+    createdAt: updatedAt,
+    updatedAt,
+    materialVersion: 1,
+    materials: [{ id: `m-${id}`, text: `材料-${id}` }],
+    history: Array.from({ length: turns }, (_, index) =>
+      mkTurn(`${id}-t${index}`, `问题 ${id} 第 ${index} 条`),
+    ),
+  });
+
+  /* --- 10a 纯函数真值表（不依赖渲染） --- */
+  const many = Array.from({ length: 60 }, (_, index) => mkTurn(`t${index}`, `第 ${index} 条`));
+  const trimmed = trimTurns(many, 50);
+  check('★ 问答超上限时裁到上限条数', trimmed.length === 50, trimmed.length);
+  check(
+    '★ 裁掉的是**最旧**的（保留最近才有用）',
+    trimmed[0]?.question === '第 10 条' && trimmed[49]?.question === '第 59 条',
+    [trimmed[0]?.question, trimmed[49]?.question],
+  );
+  check('未超上限时原样返回', trimTurns(many.slice(0, 3), 50).length === 3);
+
+  const updated = upsertEntry(
+    [entry('a', '2026-09-23T01:00:00.000Z')],
+    entry('a', '2026-09-23T05:00:00.000Z'),
+  );
+  check('★ 同一会话再次 upsert 不会出现两条', updated.length === 1, updated.length);
+  check('★ 内容取最新那次（updatedAt 被刷新）', updated[0]?.updatedAt === '2026-09-23T05:00:00.000Z');
+
+  const ordered = upsertEntry(
+    [entry('b', '2026-09-23T01:00:00.000Z'), entry('a', '2026-09-23T03:00:00.000Z')],
+    entry('c', '2026-09-23T02:00:00.000Z'),
+  );
+  check(
+    '★ 按 updatedAt 倒序（最近的在最前）',
+    ordered.map((item) => item.sessionId).join('') === 'acb',
+    ordered.map((item) => item.sessionId),
+  );
+  const tie = upsertEntry(
+    [entry('z', '2026-09-23T01:00:00.000Z')],
+    entry('a', '2026-09-23T01:00:00.000Z'),
+  );
+  const tieAgain = upsertEntry(
+    [entry('z', '2026-09-23T01:00:00.000Z')],
+    entry('a', '2026-09-23T01:00:00.000Z'),
+  );
+  check(
+    '★ 时间相同时顺序仍然确定（否则断言会偶发失败）',
+    tie.map((item) => item.sessionId).join('') === tieAgain.map((item) => item.sessionId).join(''),
+    tie.map((item) => item.sessionId),
+  );
+
+  const capped = Array.from({ length: 12 }, (_, index) =>
+    entry(`s${String(index).padStart(2, '0')}`, `2026-09-23T${String(index).padStart(2, '0')}:00:00.000Z`),
+  ).reduce((list, item) => upsertEntry(list, item, 10), [] as SessionHistoryEntry[]);
+  check('★ 会话数超上限时裁到上限', capped.length === 10, capped.length);
+
+  check(
+    '删除按 sessionId 生效',
+    removeEntry([entry('a', 'x'), entry('b', 'y')], 'a').length === 1,
+  );
+
+  check('★ 存储内容损坏时降级为空（不抛错）', parseEntries('{ 这不是 JSON').length === 0);
+  check('★ 不是数组时降级为空', parseEntries('{"sessionId":"x"}').length === 0);
+  check('★ 缺字段的条目被过滤掉（不把脏数据当历史）', parseEntries('[{"sessionId":"x"}]').length === 0);
+  check(
+    '合法条目能读回',
+    parseEntries(JSON.stringify([entry('a', '2026-09-23T01:00:00.000Z')])).length === 1,
+  );
+  check('null / 空串降级为空', parseEntries(null).length === 0 && parseEntries('').length === 0);
+
+  /* --- 10b 左栏历史列表 --- */
+  const currentEntry = entry('cur', '2026-09-23T06:00:00.000Z');
+  const pastEntry = entry('old', '2026-09-22T06:00:00.000Z');
+  const navWithHistory = render(
+    '左栏（有一条历史会话）',
+    <SidebarNav
+      wb={makeWb({ sessionId: 'cur', historyEntries: [currentEntry, pastEntry] })}
+      view="chat"
+      onViewChange={() => {}}
+    />,
+  );
+  check('★ 有历史时出现「历史会话」组', navWithHistory.includes('历史会话'));
+  check('★ 历史条目显示它自己的标题（取自该会话的材料/首问）', navWithHistory.includes('材料-old'));
+  check(
+    '★ 列表里**不重复**当前会话（它在「对话」组里已经显示过）',
+    !navWithHistory.includes('材料-cur'),
+    undefined,
+  );
+  check(
+    '★★ 底部如实说明"仅本标签页保存，关闭标签页即清空"（不说明会被当成云端历史）',
+    navWithHistory.includes('仅本标签页保存'),
+  );
+
+  const navNoHistory = render(
+    '左栏（没有历史）',
+    <SidebarNav wb={makeWb()} view="chat" onViewChange={() => {}} />,
+  );
+  check('★ 没有历史时整组不出现（不留空壳标题）', !navNoHistory.includes('历史会话'));
 }
 
 /* ==================== 汇总 ==================== */

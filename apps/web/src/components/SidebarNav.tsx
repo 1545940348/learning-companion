@@ -18,7 +18,11 @@
  */
 
 import type { Workbench } from '../app/model/workbench-types';
-import { deriveSessionLabel, describeSession } from '../app/model/conversation';
+import {
+  deriveSessionLabel,
+  describeSession,
+  formatRelativeDay,
+} from '../app/model/conversation';
 import { Icon, type IconName } from './Icon';
 
 /** 主区六种视图，与六面板一一对应 */
@@ -58,6 +62,15 @@ export function SidebarNav({ wb, view, onViewChange }: Props) {
     graph: wb.graph?.nodes.length,
   };
 
+  /* 过往会话：**排除当前这一条**（当前已经在「对话」组里单独显示） */
+  const pastEntries = wb.historyEntries.filter((entry) => entry.sessionId !== wb.sessionId);
+
+  /*
+   * 时间基准只取一次：若每行各调一次 `new Date()`，同一份列表里的两行会用不同的瞬间，
+   * 跨零点时（23:59:59.9 与 00:00:00.1）会出现"一行今天、一行昨天"的错位。
+   */
+  const now = new Date();
+
   return (
     <nav className="side" aria-label="导航">
       <div className="side-brand">
@@ -88,6 +101,32 @@ export function SidebarNav({ wb, view, onViewChange }: Props) {
         </button>
         <div className="side-sub">{sub}</div>
       </div>
+
+      {/*
+        本标签页归档的**过往**会话（`P2-2`）—— 刻意**不含当前这一条**（它在上面已经显示）。
+        列表为空时整组不出现，不留一个空壳标题。
+        ⚠️ 底部那句"仅本标签页保存"是**能力边界的如实标注**，不是装饰性小字：
+        `sessionStorage` 关掉标签页就清空，不说明会让人以为这是云端历史。
+      */}
+      {pastEntries.length > 0 && (
+        <div className="side-group">
+          <div className="side-group-title">历史会话</div>
+          {pastEntries.map((entry) => (
+            <button
+              key={entry.sessionId}
+              className="side-item"
+              disabled={wb.anyBusy}
+              onClick={() => void wb.switchSession(entry.sessionId)}
+              title={`本标签页保存 · 材料 ${entry.materials.length} 份 · 问答 ${entry.history.length} 条`}
+            >
+              <Icon name="history" size={16} />
+              <span className="side-label">{deriveSessionLabel(entry)}</span>
+              <span className="side-time">{formatRelativeDay(entry.updatedAt, now)}</span>
+            </button>
+          ))}
+          <div className="side-sub">仅本标签页保存，关闭标签页即清空</div>
+        </div>
+      )}
 
       <div className="side-group">
         <div className="side-group-title">功能</div>

@@ -31,7 +31,8 @@ export type IconName =
   | 'chevron'
   | 'close'
   | 'refresh'
-  | 'stop';
+  | 'stop'
+  | 'history';
 
 const PATHS: Record<IconName, ReactElement> = {
   chat: (
@@ -147,6 +148,13 @@ const PATHS: Record<IconName, ReactElement> = {
   stop: (
     <>
       <rect x="6" y="6" width="12" height="12" rx="2" />
+    </>
+  ),
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v5h5" />
+      <path d="M12 8.5V12l2.8 1.8" />
     </>
   ),
 };
