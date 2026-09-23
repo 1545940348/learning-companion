@@ -812,6 +812,34 @@ console.log('\n--- 5. 练习面板 ---');
     Boolean(startButton) && /disabled/.test(startButton ?? ''),
     startButton ?? null,
   );
+
+  /*
+   * 变式题入口（`P-B17`，2026-09-23）。
+   *
+   * ⚠️ 这一屏的文案纪律与出题提示词第 4 条一致：写「需要加强的概念」，
+   * **不写**「你的薄弱点」—— 学生做题时不该被提醒"你是差生"。
+   */
+  const variant = render(
+    '练习面板（变式题来源 · P-B17）',
+    <QuizPanel wb={makeWb({ materials: [] })} initialSource="variant" />,
+  );
+  check('★ 有「针对需加强的概念」这个来源按钮', variant.includes('针对需加强的概念'));
+  check(
+    '★ 说明变式题不依赖材料',
+    variant.includes('不依赖材料'),
+  );
+  check(
+    '★★ 文案里**不出现**「薄弱点／差生」这类会刺痛学生的措辞',
+    !/薄弱点|差生/.test(variant),
+  );
+  check(
+    '★★ 零材料时变式题的出题按钮**不被禁用**（它本来就不依赖材料）',
+    (() => {
+      const buttons = variant.match(/<button[^>]*>[\s\S]*?<\/button>/g) ?? [];
+      const start = buttons.find((tag) => tag.includes('开始练习') || tag.includes('换一组'));
+      return Boolean(start) && !/disabled/.test(start ?? '');
+    })(),
+  );
 }
 
 /* ==================== 6. 画像 ==================== */

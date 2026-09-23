@@ -11,6 +11,7 @@ import {
   answerQuestion,
   analyzeKnowledge,
   generateQuizFromMaterial,
+  generateVariantQuiz,
   supplementGap,
   /* 与方法名同名，导入时改名以避免遮蔽（方法是"已绑定 caller"的那一层） */
   supplementGapWithCorrection as runSupplementWithCorrection,
@@ -21,6 +22,7 @@ import type {
   AnswerQuestionInput,
   AnswerQuestionOutput,
   GenerateQuizInput,
+  GenerateVariantInput,
   SupplementGapInput,
   SupplementGapOutput,
   SupplementVerification,
@@ -55,6 +57,14 @@ export interface TeachingModule {
     verify: (draft: { content: string; claims: unknown[] }) => SupplementVerification,
   ): Promise<SupplementWithCorrectionResult>;
   generateQuizFromMaterial(input: GenerateQuizInput): Promise<QuizItem[]>;
+  /**
+   * 按**学生画像里的薄弱概念**生成变式题（`P-B17`，2026-09-23）。
+   *
+   * 与 `generateQuizFromMaterial` 的差别是**出题依据**：一个依据材料，一个依据个人画像。
+   * 因此返回值里的 `source` 一律是 `'variant'` —— **由这里定，不由模型自报**
+   * （让模型填 `source` 就等于把"这题是哪来的"交给它发挥）。
+   */
+  generateVariantQuiz(input: GenerateVariantInput): Promise<QuizItem[]>;
   validateAnswerBlocks(
     blocks: AnswerBlock[],
     refs: AllowedRef[],
@@ -71,6 +81,7 @@ export function createTeachingModule(call: ModelCaller): TeachingModule {
     supplementGapWithCorrection: (input, verify) =>
       runSupplementWithCorrection(call, input, verify),
     generateQuizFromMaterial: (input) => generateQuizFromMaterial(call, input),
+    generateVariantQuiz: (input) => generateVariantQuiz(call, input),
     validateAnswerBlocks,
   };
 }

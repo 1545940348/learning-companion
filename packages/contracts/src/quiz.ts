@@ -19,8 +19,12 @@ export const TOPIC_LABELS: Record<Topic, string> = {
  * 题目来源
  * - fixed    项目自编固定题，须标注身份，不能伪装成上传讲义原题
  * - material 基于当前会话材料生成，属来源类别 ②
+ * - variant  按**学生画像里的薄弱概念**生成的变式题（`P-B17`，2026-09-23 新增）
+ *
+ * ⚠️ `variant` 与另两者的差别不在"谁出的"，而在**出题依据是个人画像** ——
+ * 因此题目本身**不得暴露个人数据**（不写"因为你答错过"这类话，见出题提示词第 4 条）。
  */
-export type QuizSource = 'fixed' | 'material';
+export type QuizSource = 'fixed' | 'material' | 'variant';
 
 export interface QuizOption {
   id: string;

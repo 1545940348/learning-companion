@@ -605,5 +605,97 @@ console.log('\n=== 账号：登录 / 身份 / 登出（演示级） ===\n');
   );
 }
 
+/* ==================== 变式题（P-B17，2026-09-23） ==================== */
+
+console.log('\n=== 变式题：按需加强的概念出题 / 零材料也能练 / 无可练时如实返回空集 ===\n');
+{
+  const variantSession = (await call('POST', '/api/session')).json;
+
+  /* ① 还没有任何学习记录 ⇒ 空题集（且**不该去调模型**） */
+  const none = await call('POST', '/api/quiz', {
+    topic: 'derivative',
+    source: 'variant',
+    sessionId: variantSession.id,
+  });
+  check(
+    '★★ 没有任何学习记录时返回**空题集**（不凭空出题）',
+    none.status === 200 && none.json?.items?.length === 0,
+    none.json?.items?.length,
+  );
+
+  /* ② 造一条「已补充但未验证」的弱点（`SUPPLEMENTED` 算弱：未验证不得默认正确） */
+  const profiled = await call('POST', '/api/profile', {
+    sessionId: variantSession.id,
+    events: [
+      {
+        type: 'gap-supplemented',
+        sessionId: variantSession.id,
+        conceptId: 'kp-monotonicity',
+        at: new Date().toISOString(),
+      },
+    ],
+  });
+  check(
+    '前置：该概念在画像里落成 SUPPLEMENTED',
+    profiled.json?.mastery?.['kp-monotonicity'] === 'SUPPLEMENTED',
+    profiled.json?.mastery?.['kp-monotonicity'],
+  );
+
+  const variant = await call('POST', '/api/quiz', {
+    topic: 'derivative',
+    source: 'variant',
+    sessionId: variantSession.id,
+  });
+  check(
+    '★ 有弱点后能出变式题',
+    variant.status === 200 && variant.json?.items?.length > 0,
+    variant.json?.items?.length,
+  );
+  check(
+    '★★ 题目的 source 一律是 variant（来源由服务端定，不由模型自报）',
+    variant.json.items.every((item) => item.source === 'variant'),
+  );
+  check(
+    '★ 变式题缺省「未验证」（AI 生成的题不得默认正确，§4.2）',
+    variant.json.items.every((item) => item.verification === 'unverified'),
+  );
+
+  /*
+   * ★★ 题目里不得出现画像信息 —— 变式题的**依据**是个人画像，
+   * 但题目本身不该让学生看出"因为你是差生"（与出题提示词第 4 条同一条纪律）。
+   */
+  check(
+    '★★ 题目文本里不出现「画像／薄弱／答错／弱点」这类画像提示',
+    !/画像|薄弱|答错|弱点/.test(JSON.stringify(variant.json.items)),
+  );
+
+  /* ③ 指定一个**不在画像里**的概念 ⇒ 仍然空集（不为"凑题"硬出） */
+  const unknownConcept = await call('POST', '/api/quiz', {
+    topic: 'derivative',
+    source: 'variant',
+    sessionId: variantSession.id,
+    conceptIds: ['kp-not-in-profile'],
+  });
+  check(
+    '★★ 指定的概念不在画像里 ⇒ 空集（不硬出题）',
+    unknownConcept.json?.items?.length === 0,
+    unknownConcept.json?.items?.length,
+  );
+
+  /* ④ 变式题**不要求有材料**：这个会话从头到尾没交过讲义 */
+  const zeroMaterial = await call('GET', `/api/graph?sessionId=${variantSession.id}`);
+  check(
+    '★ 上面这些变式题是在**零材料**会话里出的（变式题不依赖材料）',
+    zeroMaterial.json?.nodes?.length === 0,
+    zeroMaterial.json?.nodes?.length,
+  );
+
+  /* ⑤ 枚举扩展后守卫没有放松 */
+  check(
+    '★ `source: "wrong"` → 400（守卫照常收口）',
+    (await call('POST', '/api/quiz', { topic: 'derivative', source: 'wrong' })).status === 400,
+  );
+}
+
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);
 process.exitCode = failed > 0 ? 1 : 0;

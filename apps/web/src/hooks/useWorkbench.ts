@@ -806,7 +806,15 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
 
       if (!begin('quiz')) return null;
       try {
-        const id = source === 'material' ? await ensureMaterialSession() : undefined;
+        /*
+         * 会话 id：`fixed` 不需要会话；`material` 与 `variant` 都需要 ——
+         * 前者用它读材料，后者用它读**画像**。
+         *
+         * ⚠️ `variant` **不要求有材料**（零材料也能练变式：先做几道题暴露弱点即可），
+         * 所以它只走"没有会话就建一个空会话"，不受上面那条"零材料拒绝"的拦截
+         * —— 那条**只对 `material` 生效**。
+         */
+        const id = source === 'fixed' ? undefined : await ensureMaterialSession();
         const result = await api.quiz({
           topic,
           source,

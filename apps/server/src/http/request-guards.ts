@@ -180,10 +180,10 @@ export function guardTopic(raw: unknown): Guard<Topic> {
   return fail(`topic 只允许 ${TOPICS.join(' / ')}`);
 }
 
-export function guardQuizSource(raw: unknown): Guard<'fixed' | 'material'> {
+export function guardQuizSource(raw: unknown): Guard<'fixed' | 'material' | 'variant'> {
   if (raw === undefined || raw === null || raw === '') return ok('fixed');
-  if (raw === 'fixed' || raw === 'material') return ok(raw);
-  return fail('source 只允许 fixed / material');
+  if (raw === 'fixed' || raw === 'material' || raw === 'variant') return ok(raw);
+  return fail('source 只允许 fixed / material / variant');
 }
 
 /* ==================== 画像（V2.0 §5.3 POST /api/profile） ==================== */
