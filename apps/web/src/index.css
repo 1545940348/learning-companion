@@ -1197,6 +1197,13 @@ video {
   text-align: center;
 }
 
+.side-time {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .side-sub {
   padding: 4px 10px 0;
   font-size: 11px;

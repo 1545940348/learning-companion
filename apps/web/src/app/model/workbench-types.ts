@@ -88,6 +88,26 @@ export interface TutorTurn {
   at: string;
 }
 
+/**
+ * 一个会话在本标签页里的**归档快照**（`P2-2`，2026-09-23）。
+ *
+ * ⚠️ 类型住在这里、而不是 `session-history.ts`：它要被 `WorkbenchState.historyEntries` 引用，
+ * 而 `WorkbenchState` 在本文件 —— 定义在那边会让两个文件**互相 import**，
+ * 触发 `no-circular`（**已是 `error`**；`tsPreCompilationDeps: true` 连 `import type` 也看得见）。
+ * **纯函数与存储 IO 仍在 `session-history.ts`，这里只放类型。**
+ */
+export interface SessionHistoryEntry {
+  sessionId: string;
+  /** 首次记录时间；左栏用它显示"今天 / 昨天 / 9月20日" */
+  createdAt: string;
+  /** 最后一次变更时间；列表按它倒序 */
+  updatedAt: string;
+  materialVersion: number;
+  /** **只存文本**（与 `shared/lib/persist.ts` 同一口径：图片不长期保存，识别结果已作为文本入库） */
+  materials: { id: string; text: string }[];
+  history: TutorTurn[];
+}
+
 export interface Notice {
   kind: 'info' | 'warn' | 'error';
   text: string;
@@ -119,6 +139,13 @@ export interface WorkbenchState {
   graph: GraphNeighborhood | null;
   gaps: Record<string, GapRecord>;
   history: TutorTurn[];
+  /**
+   * 本标签页归档的会话（**含当前这一条**），按 `updatedAt` 倒序。
+   *
+   * ⚠️ **只在当前标签页有效**（`sessionStorage`）—— **关掉标签页即清空**。
+   * 界面必须如实说明这一点，不许让人以为这是"云端历史"。
+   */
+  historyEntries: SessionHistoryEntry[];
   profile: LearnerProfile | null;
   notice: Notice | null;
   /**
@@ -193,6 +220,15 @@ export interface WorkbenchActions {
   refreshGraph: (knowledgePointId?: string) => Promise<void>;
   fetchProfile: () => Promise<void>;
   startNewStudy: () => Promise<void>;
+  /**
+   * 切换到**本标签页归档过的**某个会话（`P2-2`，2026-09-23）。
+   *
+   * 恢复本地快照（材料文本、问答历史、材料版本），再向服务端要一次图谱：
+   * - 服务端仍有该会话 → 拿到图谱，**可以继续提问**；
+   * - 服务端已重启（会话不存在）→ **如实提示"服务端数据已失效"**，只恢复本地部分，
+   *   图谱与缺口状态无法恢复。**不许假装成功**（那是无据声明）。
+   */
+  switchSession: (sessionId: string) => Promise<void>;
   dismissNotice: () => void;
   /** 由界面直接抛一条提示（如"某入口尚未接入"），避免用 alert 打断操作流 */
   notify: (text: string, kind?: Notice['kind']) => void;

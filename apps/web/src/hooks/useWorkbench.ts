@@ -29,6 +29,7 @@ import { ApiError, RequestAbortedError, api, cancelInFlightRequests, describeAbo
 import { clearProgress, loadProgress, saveProgress } from '../shared/lib/persist';
 import { readImageFile } from '../shared/lib/image-input';
 import { totalTextLength } from '../app/model/materials';
+import { loadEntries, saveEntries, trimTurns, upsertEntry } from '../app/model/session-history';
 
 /**
  * 类型已搬到 `app/model/workbench-types.ts`（2026-09-23 解耦改造）。
@@ -47,6 +48,7 @@ import type {
   GapRecord,
   Notice,
   QuizReportOutcome,
+  SessionHistoryEntry,
   TutorTurn,
   UiMaterial,
   WorkbenchActions,
@@ -59,6 +61,7 @@ export type {
   GapRecord,
   Notice,
   QuizReportOutcome,
+  SessionHistoryEntry,
   TutorTurn,
   UiMaterial,
   Workbench,
@@ -167,6 +170,13 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
    * 组件局部 state 传不过去 —— 各存一份必然退化成"两套选择"，点卡片后图谱还停在上一个。
    */
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+  /**
+   * 本标签页归档的会话（`P2-2`，2026-09-23）。
+   *
+   * **初始值直接从 `sessionStorage` 读** —— 刷新后左栏能立刻列出上次的会话，
+   * 而不是先渲染成空、再"跳"出来。
+   */
+  const [historyEntries, setHistoryEntries] = useState<SessionHistoryEntry[]>(() => loadEntries());
 
   /**
    * 版本护栏的锚点。
@@ -176,6 +186,35 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
    */
   const versionRef = useRef(0);
   const sessionRef = useRef<string | null>(null);
+  /** 当前会话的"首次记录时间"，归档时作为 `createdAt`（`startNewStudy` 会把它重置为当下） */
+  const createdAtRef = useRef<string>(new Date().toISOString());
+
+  /* ---------- 会话归档（`P2-2`）：当前会话一有变化，就写进本标签页的归档 ---------- */
+
+  /*
+   * 为什么用 effect，而不是在 `ask` / `submitMaterials` 等各处手动调用：
+   * 归档要跟着**任何**状态变化走（材料、问答、版本都算），散在五处调用早晚漏一处。
+   *
+   * `sessionId` 为空（纯轻路径、还没建过会话）时不写 —— 轻路径没有会话可归档，
+   * 凭空造一条只会让左栏多出一个"点了没用"的条目。
+   */
+  useEffect(() => {
+    if (!sessionId) return;
+    const entry: SessionHistoryEntry = {
+      sessionId,
+      createdAt: createdAtRef.current,
+      updatedAt: new Date().toISOString(),
+      materialVersion,
+      materials: materials.map((item) => ({ id: item.id, text: item.text })),
+      history: trimTurns(history),
+    };
+    setHistoryEntries((previous) => upsertEntry(previous, entry));
+  }, [sessionId, materialVersion, materials, history]);
+
+  /* 归档变化即落盘 —— 单独一个 effect，避免在 setState 的 updater 里做副作用 */
+  useEffect(() => {
+    saveEntries(historyEntries);
+  }, [historyEntries]);
 
   /**
    * 正在进行中的动作集合。
@@ -857,6 +896,11 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
       setFocusedNodeId(null);
       clearFailure();
       /*
+       * 新会话 = 归档里的**新条目**：必须重置"首次记录时间"，
+       * 否则它顶着上一个会话的 `createdAt`，左栏那行会显示错误的日期。
+       */
+      createdAtRef.current = new Date().toISOString();
+      /*
        * 清理时机 ①（阶段 0 卡 4 / `D-06`）：新会话已建好 → 明确清掉旧的本地快照。
        *
        * 刻意放在**创建成功之后**：创建失败时旧快照仍能用于"刷新恢复"，
@@ -886,6 +930,73 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
   }, [applyVersion, begin, clearFailure, end]);
 
   const dismissNotice = useCallback(() => setNotice(null), []);
+
+  /* ---------- 切换回本标签页归档过的会话（`P2-2`，2026-09-23） ---------- */
+
+  const switchSession = useCallback(
+    async (targetId: string) => {
+      if (targetId === sessionRef.current) {
+        setNotice({ kind: 'info', text: '已经是当前会话。' });
+        return;
+      }
+      const entry = historyEntries.find((item) => item.sessionId === targetId);
+      if (!entry) {
+        setNotice({ kind: 'warn', text: '本标签页没有这个会话的记录，无法切换。' });
+        return;
+      }
+      if (!begin('knowledge')) return;
+      try {
+        sessionRef.current = targetId;
+        setSessionId(targetId);
+        applyVersion(entry.materialVersion);
+        setMaterials(
+          entry.materials.map((item) => ({
+            id: item.id,
+            kind: 'upload',
+            text: item.text,
+            createdAt: entry.createdAt,
+          })),
+        );
+        setHistory(entry.history);
+        /*
+         * 图谱与缺口**必须先清空再取**：它们属于上一个会话。
+         * 留着不动的后果是"图谱画的是 A 会话、材料显示的是 B 会话"—— 比报错更难发现。
+         */
+        setGraph(null);
+        setGaps({});
+        setFocusedNodeId(null);
+        clearFailure();
+
+        try {
+          const neighborhood = await api.graph(targetId);
+          setGraph(neighborhood);
+          setNotice({
+            kind: 'info',
+            text: '已切换回这个会话。材料与问答来自本标签页保存的记录，图谱来自服务端。',
+          });
+        } catch {
+          /*
+           * 服务端重启过 ⇒ 这个会话在服务端已经不存在。
+           * **如实说明，并说清"哪部分还在、哪部分没了"** —— 只写一句"切换失败"会让学生
+           * 以为自己点错了，而真相是"服务端没有长期存储"。
+           * ⚠️ 文案里不要用 markdown 的 `**`：界面是纯文本渲染，会原样显示（`I21` 的教训）。
+           */
+          setNotice({
+            kind: 'warn',
+            text:
+              '这个会话在服务端已经不存在了（服务端是内存实现，重启后会话即清空）。' +
+              '本标签页保存的材料与问答记录已恢复，可以继续阅读；但图谱与缺口状态无法恢复。' +
+              '要继续提问，请点「新对话」并重新提交材料。',
+          });
+        }
+      } catch (error) {
+        setNotice(toNotice(error, '切换会话失败。'));
+      } finally {
+        end('knowledge');
+      }
+    },
+    [applyVersion, begin, clearFailure, end, historyEntries],
+  );
 
   const notify = useCallback((text: string, kind: Notice['kind'] = 'info') => {
     setNotice({ kind, text });
@@ -952,6 +1063,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     canRetry: failedAction !== null,
     parseUnavailable,
     focusedNodeId,
+    historyEntries,
     submitMaterials,
     submitImage,
     correctMaterial,
@@ -963,6 +1075,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     refreshGraph,
     fetchProfile,
     startNewStudy,
+    switchSession,
     dismissNotice,
     notify,
     cancelPending,
