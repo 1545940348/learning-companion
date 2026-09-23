@@ -460,5 +460,68 @@ console.log('\n=== 测试材料库：清单可加载、能跑通真实链路 ===
   check('★ 材料版本被推进（材料真的落盘了）', fixtureKnowledge.json?.materialVersion === 1);
 }
 
+/* ==================== GET /api/teacher（P-C11，2026-09-23 由 501 改为已实现） ==================== */
+
+console.log('\n=== 教师视图：班级聚合（只含计数，不反推个人） ===\n');
+{
+  const teacher = await call('GET', '/api/teacher?classId=demo-class');
+  check('★ GET /api/teacher → 200（原先恒 501，本轮实现）', teacher.status === 200, teacher.status);
+  check('classId 原样回显（服务端不假装有班级实体）', teacher.json.classId === 'demo-class');
+  check(
+    '★ 如实报出样本量（是数字，不是编出来的字符串）',
+    typeof teacher.json.studentCount === 'number',
+    teacher.json.studentCount,
+  );
+  check(
+    '★ 样本量 ≥ 1（本文件此前确实提交过画像事件）',
+    teacher.json.studentCount >= 1,
+    teacher.json.studentCount,
+  );
+
+  check(
+    '概念分布是「概念 → 六态计数」的两层结构',
+    Object.values(teacher.json.mastery).every((row) =>
+      Object.values(row).every((count) => typeof count === 'number'),
+    ),
+  );
+  check(
+    '覆盖热力每条都是 {materialId, conceptId, covered:boolean}',
+    Array.isArray(teacher.json.coverageHeat) &&
+      teacher.json.coverageHeat.every(
+        (item) =>
+          typeof item.materialId === 'string' &&
+          typeof item.conceptId === 'string' &&
+          typeof item.covered === 'boolean',
+      ),
+    teacher.json.coverageHeat?.length,
+  );
+  check(
+    '误区排行按次数倒序（前端要照这个顺序展示）',
+    teacher.json.misconceptions.every(
+      (item, index) => index === 0 || teacher.json.misconceptions[index - 1].count >= item.count,
+    ),
+  );
+
+  /*
+   * ★★ 用例 E17 的核心：**聚合结果不能反推到任何具体学生**。
+   * 判据取"已知的 sessionId 是否出现在响应体里" —— 比"检查有没有叫 name 的字段"实在得多：
+   * 后者换个字段名就绕过去了。
+   */
+  const teacherRaw = JSON.stringify(teacher.json);
+  const knownIds = [session.id, emptySession.id, other.id, supplementSession.id];
+  check(
+    '★★ 响应体里不出现任何 sessionId（脱敏：不能反推到具体学生）',
+    knownIds.every((id) => !teacherRaw.includes(id)),
+    knownIds.filter((id) => teacherRaw.includes(id)),
+  );
+
+  check('缺 classId → 400（入参守卫照常生效）', (await call('GET', '/api/teacher')).status === 400);
+  check(
+    '换一个 classId 仍返回同一批聚合（演示级"一个班"，与 classId 无关）',
+    (await call('GET', '/api/teacher?classId=another')).json.studentCount ===
+      teacher.json.studentCount,
+  );
+}
+
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);
 process.exitCode = failed > 0 ? 1 : 0;

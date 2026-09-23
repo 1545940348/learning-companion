@@ -20,6 +20,7 @@ import { KnowledgePanel } from './components/KnowledgePanel';
 import { MaterialPanel } from './components/MaterialPanel';
 import { ProfilePanel } from './components/ProfilePanel';
 import { QuizPanel } from './components/QuizPanel';
+import { TeacherPanel } from './components/TeacherPanel';
 import type { ViewKey } from './components/SidebarNav';
 import { useWorkbench } from './hooks/useWorkbench';
 
@@ -67,6 +68,7 @@ export function App() {
       {view === 'graph' && <GraphPanel wb={wb} />}
       {view === 'quiz' && <QuizPanel wb={wb} />}
       {view === 'profile' && <ProfilePanel wb={wb} />}
+      {view === 'teacher' && <TeacherPanel wb={wb} />}
     </AppShell>
   );
 }

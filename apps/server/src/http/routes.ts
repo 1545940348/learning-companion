@@ -46,6 +46,7 @@ import type {
   Session,
   SessionListResponse,
   SupplementBlock,
+  TeacherResponse,
   TutorResponse,
   VerificationEngineStatus,
   VerificationStatus,
@@ -95,6 +96,7 @@ import {
   commitProfileEvents,
   commitSupplement,
   createSession,
+  aggregateClass,
   getGraphNeighborhood,
   listSessionSummaries,
   previewMaterials,
@@ -783,20 +785,30 @@ apiRouter.post(
 /* ==================== GET /api/teacher（P1，阶段三） ==================== */
 
 /**
- * 教师视图。
+ * 教师视图：班级聚合（`P-C11`，**2026-09-23 由 501 改为已实现**）。
  *
- * **本阶段刻意不实现**：说明书把教师视图列为 P1、计划在阶段三交付，
- * 且需要班级数据模型（当前不存在）。此处保留一个明确的 501 说明位，
- * 而不是返回空对象 —— 空对象会被前端与评审误读为"已实现但数据为空"（§9）。
+ * ### 与"刻意不实现"那段口径的关系
+ *
+ * 本条原先返回 501，理由写在旧注释里：「需要班级数据模型（当前不存在），
+ * 保留一个明确的 501 说明位，而不是返回空对象」—— 那个判断**本身没错**：
+ * 空对象会被误读成"已实现但没数据"。
+ * 现在改为实现，靠的是**不假装有班级**：把当前进程内的会话视为一个班、
+ * `classId` 原样回显，并在响应体里如实报出 `studentCount`；
+ * 样本不足（< `TEACHER_MIN_SAMPLE`）由**界面**提示「样本不足」，不由服务端编数据。
+ *
+ * ### 只读与脱敏（用例 E17）
+ *
+ * 返回体**只含计数与概念维度统计**：状态分布、误区排行、覆盖热度。
+ * 没有任何字段能反推到某个具体学生 —— 这也是契约对 `ClassAggregate` 的定义。
  */
-apiRouter.get('/teacher', (_req, res) => {
-  respond(
-    res,
-    defaultStatusForApiCode('NOT_IMPLEMENTED'),
-    'NOT_IMPLEMENTED',
-    '教师视图（GET /api/teacher）计划在阶段三交付，当前版本尚未实现。',
-  );
-});
+apiRouter.get(
+  '/teacher',
+  asyncHandler(async (req, res) => {
+    const classId = unwrap(guardNonEmptyText(req.query.classId, 'classId'));
+    const response: TeacherResponse = aggregateClass(classId);
+    res.json(response);
+  }),
+);
 
 /**
  * 未匹配的 /api 路径。
