@@ -11,8 +11,8 @@
 import { useState } from 'react';
 import type { QuizItem, QuizSource, Topic } from '@lc/contracts';
 import { FIXED_QUIZ_PER_TOPIC, TOPIC_LABELS } from '@lc/contracts';
-import type { WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
-import type { QuizReportOutcome } from '../hooks/useWorkbench';
+import type { WorkbenchActions, WorkbenchState } from '../app/model/workbench-types';
+import type { QuizReportOutcome } from '../app/model/workbench-types';
 import { QUIZ_SOURCE_LABELS, VERIFICATION_LABELS, verificationClass } from '../shared/lib/labels';
 
 type Props = {

@@ -16,8 +16,8 @@
 import { useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import { MATERIAL_LIMITS } from '@lc/contracts';
-import type { UiMaterial, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
-import { totalTextLength } from '../hooks/useWorkbench';
+import type { UiMaterial, WorkbenchActions, WorkbenchState } from '../app/model/workbench-types';
+import { totalTextLength } from '../app/model/materials';
 import { VoiceInputButton } from './VoiceInputButton';
 
 type Props = { wb: WorkbenchState & WorkbenchActions; mock: boolean };

@@ -19,7 +19,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { PrerequisiteStatus } from '@lc/contracts';
-import type { GapRecord, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
+import type { GapRecord, WorkbenchActions, WorkbenchState } from '../app/model/workbench-types';
 import { SOURCE_LABELS, STATUS_LABELS } from '../shared/lib/labels';
 
 type Props = { wb: WorkbenchState & WorkbenchActions };

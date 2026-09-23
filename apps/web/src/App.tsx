@@ -1,29 +1,38 @@
 /**
  * 微积分学伴 · 学习工作台（A）
  *
- * 两条路径共用一个页面（说明书 §2.1）：
+ * 交互形态（2026-09-23 L 档改造）：**左栏「对话 / 功能」切换 + 主栏对话流**。
+ * 两条路径仍共用同一个会话模型（说明书 §2.1）：
  * - **轻路径**：没上传材料时提问，`sessionId` 为 null，回答标注「未基于你的材料」；
  * - **材料路径**：粘贴讲义 → 解析出知识点与前置缺口 → 一键补充 → 分步答疑 → 练习 → 画像。
  *
- * 页面对「尚未实现的能力」一律如实标注，不用占位内容充数（§9）。
+ * 本文件只做两件事：**取健康状态**、**按视图挑一个面板装进壳里**。
+ * 布局细节在 `components/AppShell.tsx`，对话呈现规则在 `app/model/conversation.ts`。
  */
 
 import { useEffect, useState } from 'react';
 import type { HealthResponse } from '@lc/contracts';
-import { MATERIAL_LIMITS, MODEL_TIMEOUT_MS } from '@lc/contracts';
 import { api } from './api';
+import { AppShell } from './components/AppShell';
+import { ConversationView } from './components/ConversationView';
 import { GraphPanel } from './components/GraphPanel';
 import { KnowledgePanel } from './components/KnowledgePanel';
 import { MaterialPanel } from './components/MaterialPanel';
 import { ProfilePanel } from './components/ProfilePanel';
 import { QuizPanel } from './components/QuizPanel';
-import { TutorPanel } from './components/TutorPanel';
-import { shouldOfferRetry, useWorkbench } from './hooks/useWorkbench';
+import type { ViewKey } from './components/SidebarNav';
+import { useWorkbench } from './hooks/useWorkbench';
 
 export function App() {
   const wb = useWorkbench();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [view, setView] = useState<ViewKey>('chat');
+  /**
+   * 窄屏下左栏是抽屉。**宽屏不读这个值**（CSS 媒体查询决定），
+   * 所以它在桌面端永远是关的也不影响布局。
+   */
+  const [sideOpen, setSideOpen] = useState(false);
 
   useEffect(() => {
     api
@@ -34,135 +43,30 @@ export function App() {
       });
   }, []);
 
-  const budgetSeconds = Math.round(MODEL_TIMEOUT_MS / 1000);
+  const mock = health?.mock === true;
+
+  function handleViewChange(next: ViewKey) {
+    setView(next);
+    /* 抽屉形态下选完即收，省一次点击 */
+    setSideOpen(false);
+  }
 
   return (
-    <div className="page">
-      <header className="header">
-        <div>
-          <h1>微积分学伴</h1>
-          <p className="subtitle">
-            导数 · 切线 · 单调性 ｜ 先回答你的问题，问不出来时替你找出缺的那一块
-          </p>
-        </div>
-        <div className="status">
-          {health && (
-            <>
-              <span className={health.mock ? 'badge badge-warn' : 'badge badge-ok'}>
-                模型通道：{health.modelProvider}
-                {health.mock ? '（mock，未配置密钥）' : ''}
-              </span>
-              <span className={health.verification.available ? 'badge badge-ok' : 'badge badge-muted'}>
-                符号验证：{health.verification.available ? `可用（${health.verification.engine}）` : '未接入'}
-              </span>
-            </>
-          )}
-          {healthError && <span className="badge badge-err">服务端未连接</span>}
-        </div>
-      </header>
-
-      {health?.mock && (
-        <div className="notice notice-warn">
-          <span>
-            <strong>当前是 mock 演示通道。</strong>
-            模型调用没有真正发生 —— 回答与知识点由固定的演示数据生成，用来验证完整链路，
-            <strong>不代表真实模型的输出质量</strong>。服务端配好密钥并设
-            MODEL_PROVIDER=deepseek 后即为真实调用（评委无需自行配置）。
-          </span>
-        </div>
-      )}
-
-      {!health?.verification.available && health && (
-        <p className="warn-inline">
-          符号验证引擎尚未接入，因此所有补充内容与推导一律标为
-          <strong>未验证</strong>：系统不会把"没验证过"当成"已验证"（§4.2）。
-        </p>
-      )}
-
-      {wb.anyBusy && (
-        /*
-         * 阶段 0 卡 3（`D-03`）：模型通道慢时学生最长要干等 90 秒，而单飞约定会挡住
-         * 其它动作 —— 必须给一个"取消"。取消后由发起那次调用的 catch 给中性提示。
-         */
-        <div className="notice notice-info">
-          <span>
-            正在处理中：模型调用最长可能需要 120 秒。不想等可以取消，已完成的步骤会保留。
-          </span>
-          <button className="btn btn-sm" onClick={wb.cancelPending}>
-            取消
-          </button>
-        </div>
-      )}
-
-      {wb.notice && (
-        <div className={`notice notice-${wb.notice.kind}`}>
-          <span>{wb.notice.text}</span>
-          {/*
-           * `I20⑤`：重试按钮必须与**当前这条提示**绑定。
-           *
-           * `canRetry` 只是"上一次动作失败过"的全局标志，它和眼前这条提示没有关系 ——
-           * 上一条失败提示被新的普通提示（如"已按修正后的内容重建…"）顶掉之后，
-           * 新提示上仍会挂着「重试」，点了会重放一个与它无关的动作。
-           * 因此再加一条：这条提示本身必须是服务端标了 `retryable` 的失败。
-           */}
-          {shouldOfferRetry(wb.notice, wb.canRetry) && (
-            <button className="btn btn-sm" onClick={wb.retryLastFailed} disabled={wb.anyBusy}>
-              {wb.anyBusy ? '正在重试…' : '重试'}
-            </button>
-          )}
-          <button className="link" onClick={wb.dismissNotice}>
-            知道了
-          </button>
-        </div>
-      )}
-
-      <main className="layout">
-        <div className="column">
-          <MaterialPanel wb={wb} mock={health?.mock === true} />
-          <KnowledgePanel wb={wb} />
-          <GraphPanel wb={wb} />
-        </div>
-        <div className="column">
-          <TutorPanel wb={wb} mock={health?.mock === true} />
-          <QuizPanel wb={wb} />
-          <ProfilePanel wb={wb} />
-        </div>
-      </main>
-
-      <footer className="footer">
-        <div className="footer-block">
-          <strong>会话状态</strong>
-          <span>
-            {wb.sessionId ? `材料版本 v${wb.materialVersion} · 会话 ${wb.sessionId.slice(0, 8)}` : '轻路径（未创建材料会话）'}
-          </span>
-          <span>
-            材料上限 {MATERIAL_LIMITS.maxMaterialsPerSession} 份 / {MATERIAL_LIMITS.maxTextLength} 字 ·
-            单次请求预算 {budgetSeconds} 秒（含验证）
-          </span>
-        </div>
-        <div className="footer-block">
-          <strong>本页尚未接入</strong>
-          <span>
-            教师视图、多智能体编排、错题归因。
-            这些入口要么不出现，要么出现时明确说明不可用，不以占位内容冒充已实现。
-          </span>
-        </div>
-        <div className="footer-block">
-          <strong>语音识别发生在哪里</strong>
-          <span>
-            语音在你的浏览器里转成文字，再作为普通文本进入系统。
-            服务端的识别能力里**不含**语音（服务端不转写语音）——
-            这与「图片由服务端识别」是两回事，在这里分开说明，不合并成一句"支持图文语音"。
-          </span>
-        </div>
-        <div className="footer-block">
-          <strong>符号验证的边界</strong>
-          <span>
-            覆盖求导值、切线、单调区间、极值点四类断言；超出课程范围或超出输入规模的一律标为
-            「未验证」，不会当成已验证。
-          </span>
-        </div>
-      </footer>
-    </div>
+    <AppShell
+      health={health}
+      healthError={healthError}
+      wb={wb}
+      view={view}
+      onViewChange={handleViewChange}
+      sideOpen={sideOpen}
+      onToggleSide={() => setSideOpen((open) => !open)}
+    >
+      {view === 'chat' && <ConversationView wb={wb} mock={mock} />}
+      {view === 'material' && <MaterialPanel wb={wb} mock={mock} />}
+      {view === 'knowledge' && <KnowledgePanel wb={wb} />}
+      {view === 'graph' && <GraphPanel wb={wb} />}
+      {view === 'quiz' && <QuizPanel wb={wb} />}
+      {view === 'profile' && <ProfilePanel wb={wb} />}
+    </AppShell>
   );
 }

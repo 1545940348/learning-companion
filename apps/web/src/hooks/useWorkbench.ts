@@ -14,7 +14,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   GraphNeighborhood,
-  KnowledgePoint,
   LearnerProfile,
   Material,
   PrerequisiteRelation,
@@ -24,205 +23,48 @@ import type {
   QuizSource,
   Topic,
   TutorMode,
-  TutorResponse,
-  VerificationStatus,
 } from '@lc/contracts';
 import { MATERIAL_LIMITS } from '@lc/contracts';
 import { ApiError, RequestAbortedError, api, cancelInFlightRequests, describeAbort } from '../api';
 import { clearProgress, loadProgress, saveProgress } from '../shared/lib/persist';
 import { readImageFile } from '../shared/lib/image-input';
+import { totalTextLength } from '../app/model/materials';
 
 /**
- * 界面上的一份材料。
+ * 类型已搬到 `app/model/workbench-types.ts`（2026-09-23 解耦改造）。
  *
- * `corrected` 是**纯界面标记**，不进契约：它表示这份原文已被学生就地纠错，
- * 修正后的内容已作为新材料重新提交（用例 E12 的契约限制见 `correctMaterial`）。
+ * 为什么要搬：六面板原先为了拿类型都 `import type … from '../hooks/useWorkbench'`，
+ * `dependency-cruiser` 的 `panels-should-not-import-state-internals` 于是 **6/6 全报**
+ * （presentation → state internals）。类型是**契约面**、不是状态内部实现，
+ * 独立成模块后该规则清零并已按项目惯例转 `error`。
  *
- * `lowConfidence` 来自 `/api/parse`，用于标注"识别可能不准"（§2.2）。
+ * 这里**原样再导出**，既有调用点（含 `scripts/verify-render.tsx`）继续可用；
+ * **新代码请直接从 `app/model/workbench-types` 引**，不要再往本文件加类型。
  */
-export type UiMaterial = Material & {
-  corrected?: boolean;
-  /**
-   * 图片材料识别到的公式（LaTeX **源码**）。**纯界面字段，不进契约**（与 `corrected` 同理）。
-   *
-   * ⚠️ **只在图片材料上有值，并且允许为空数组** —— 这两种情况必须分开：
-   * - `undefined` = 没走图片路径（手打材料、纠错材料）⇒ 界面对公式**一个字都不该说**；
-   * - `[]` = 走了图片路径、识别成功，但**本次没找到公式** ⇒ 要说一句"这张图里没有识别到公式"，
-   *   并且**必须说清这不是"通道没接"**（2026-09-22 口径：能力 ≠ 结果）。
-   *
-   * 混成一个"没有公式"会让纯文字材料也收到一句莫名其妙的提示。
-   */
-  formulas?: string[];
-};
+import type {
+  ActionKey,
+  FailedAction,
+  GapRecord,
+  Notice,
+  QuizReportOutcome,
+  TutorTurn,
+  UiMaterial,
+  WorkbenchActions,
+  WorkbenchState,
+} from '../app/model/workbench-types';
 
-/** 正在进行的动作。**门控按钮要用 `isBusy(key)`，不要用 `busy`**（见其注释） */
-export type ActionKey = 'knowledge' | 'gap' | 'tutor' | 'quiz' | 'profile';
-
-/**
- * 上一次失败、且服务端标记为可重试的动作。
- *
- * 存**描述符**而不是闭包：闭包会捕获当时的 state（可能已过期），
- * 而描述符在重放时重新走一遍正常流程，用的是最新状态。
- */
-export type FailedAction =
-  | { kind: 'knowledge'; texts: string[] }
-  | { kind: 'gap'; conceptId: string; reason: string }
-  | { kind: 'tutor'; question: string; mode: TutorMode }
-  | { kind: 'profile' };
-
-/** 一次缺口补充的结果，按 conceptId 归档（§3.4） */
-export interface GapRecord {
-  content: string;
-  supplementBlockId: string;
-  status: PrerequisiteStatus;
-  verification: VerificationStatus;
-}
-
-/** 一条问答历史；带 `stale` 表示其依据已被后续材料更新（用例 E12） */
-export interface TutorTurn {
-  id: string;
-  question: string;
-  mode: TutorMode;
-  answer: TutorResponse;
-  stale: boolean;
-  at: string;
-}
-
-export interface Notice {
-  kind: 'info' | 'warn' | 'error';
-  text: string;
-  /** 为 true 时界面给「重试」按钮（只在服务端标记 retryable 时为 true） */
-  retryable?: boolean;
-}
-
-/**
- * 练习提交的上报结果（`I33`）。
- *
- * 存在的理由：面板要如实说明"这次提交有没有真的写进画像"。
- * 拿不到这个信息时，界面只能写一句听起来合理的话 —— 而默认自编题路径
- * **根本没有请求发出**，那句话就是编的。
- */
-export type QuizReportOutcome =
-  /** 服务端已接受这条画像事件 */
-  | 'sent'
-  /** 本次练习没有学习会话（自编题路径）→ **没有发出任何请求** */
-  | 'no-session'
-  /** 发过请求但失败（不阻断练习，§4.5） */
-  | 'failed';
-
-export interface WorkbenchState {
-  sessionId: string | null;
-  materialVersion: number;
-  materials: UiMaterial[];
-  /** 已提交过 /api/knowledge 的材料文本快照，用于「就地纠错」时对比与重传 */
-  knowledge: { points: KnowledgePoint[]; prerequisites: PrerequisiteRelation[] } | null;
-  graph: GraphNeighborhood | null;
-  gaps: Record<string, GapRecord>;
-  history: TutorTurn[];
-  profile: LearnerProfile | null;
-  notice: Notice | null;
-  /**
-   * 最近**开始**的动作，仅用于显示"正在…"的文案。
-   *
-   * ⚠️ **不要用它门控按钮**：它只记录一个值，两个动作先后开始时会被覆盖，
-   * 前一个结束时又会把后一个的忙碌态清掉 —— 这正是原先的缺陷。
-   * 门控一律用 `isBusy(key)` / `anyBusy`。
-   */
-  busy: ActionKey | null;
-  /** 是否有任意动作在进行（按钮是否该灰掉看它） */
-  anyBusy: boolean;
-  /** 是否存在可重试的失败动作 */
-  canRetry: boolean;
-  /** 最近一次 `/api/parse` 报告的、尚未接入的识别通道（如 `['formula']`） */
-  parseUnavailable: string[];
-  /**
-   * 当前选中的知识点（图谱高亮 + 知识卡片高亮共用）。`null` 表示没有选中。
-   *
-   * 说明：这只是**界面选择**，不参与六态判定，也不上报服务端 ——
-   * 学生看一眼图谱不应该产生任何模型调用或画像事件。
-   */
-  focusedNodeId: string | null;
-}
-
-export interface WorkbenchActions {
-  /**
-   * 提交材料并重建图谱（可一次传多段）。
-   *
-   * 返回是否成功 —— 界面据此决定**要不要清空输入框**。
-   * §5.4 要求失败时保留学生的输入，成功才清。
-   */
-  submitMaterials: (texts: string[]) => Promise<boolean>;
-  /**
-   * 上传一张图片作为材料（视觉入口）。
-   *
-   * 文本由**服务端**从图片识别得到，识别完走与文字材料**完全相同**的下游管道。
-   * 返回是否成功，语义与 `submitMaterials` 一致。
-   */
-  submitImage: (file: File) => Promise<boolean>;
-  /** 就地纠错：把某份材料改成新文本并重建（用例 E12） */
-  correctMaterial: (materialId: string, text: string) => Promise<void>;
-  /** 一键补充缺口（§2.3） */
-  supplementGap: (conceptId: string, reason: string) => Promise<void>;
-  /** 学生选「我已掌握，继续」：只影响引导，不改材料覆盖状态（§2.3） */
-  claimKnown: (conceptId: string) => Promise<void>;
-  ask: (question: string, mode: TutorMode) => Promise<boolean>;
-  loadQuiz: (topic: Topic, source: QuizSource) => Promise<QuizItem[] | null>;
-  /**
-   * 上报一次练习提交。
-   *
-   * **只上报 `quiz-attempted`，不上报错题归因**：§2.6 要求归因须给出可核对的理由，
-   * 不得仅凭答案对错断言 —— 归因需要诊断 Agent（P1，未实现），
-   * 现在硬塞一个"计算错误"到画像里就是编造。
-   *
-   * ### 返回值（`I33`）
-   *
-   * 面板原先无条件写「本次提交已作为一条画像事件上报」，但默认的「项目自编题」
-   * 来源**不会建会话**，`sessionRef.current` 为空 → 函数在开头就 `return`，
-   * **根本没有请求发出**。这是无据声明（与 `I20⑦` 同一类）。
-   * 因此改为把"到底发生了什么"如实交给调用方，由它决定怎么写：
-   * - `'sent'` 服务端已接受这次事件；
-   * - `'no-session'` 本次练习没有学习会话（默认自编题路径）→ **没有发出任何请求**；
-   * - `'failed'` 发出过请求但失败了（不阻断练习，§4.5）。
-   */
-  reportQuizAttempt: (payload: {
-    topic: Topic;
-    source: QuizSource;
-    total: number;
-    correct: number;
-  }) => Promise<QuizReportOutcome>;
-  refreshGraph: (knowledgePointId?: string) => Promise<void>;
-  fetchProfile: () => Promise<void>;
-  startNewStudy: () => Promise<void>;
-  dismissNotice: () => void;
-  /** 由界面直接抛一条提示（如"某入口尚未接入"），避免用 alert 打断操作流 */
-  notify: (text: string, kind?: Notice['kind']) => void;
-  /** 退出轻路径、进入材料路径：此时才真正创建会话 */
-  ensureMaterialSession: () => Promise<string>;
-  /** 指定动作是否正在进行 —— **按钮 disabled 用这个** */
-  isBusy: (key: ActionKey) => boolean;
-  /**
-   * 取消当前所有在飞请求（阶段 0 卡 3 / `D-03`）。
-   *
-   * 为什么要它：`MODEL_TIMEOUT_MS = 90 s` 意味着模型通道慢时学生最长要干等 90 秒，
-   * 而单飞约定（`begin()`）会挡住其它动作 —— 没有取消就只能等。
-   * 取消后由**发起那次调用的 catch** 给出中性提示（不报错、不给重试按钮），
-   * 见 `toNotice` 对 `RequestAbortedError` 的分支。
-   */
-  cancelPending: () => number;
-  /**
-   * 重放上一次失败的动作（§5.4「可重试并保留输入」）。
-   *
-   * 不覆盖**练习**：`loadQuiz` 的结果由 `QuizPanel` 自己持有，
-   * 在这里重放拿到的题目面板收不到。练习的失败由面板上的「换一组」重试。
-   */
-  retryLastFailed: () => Promise<void>;
-  /**
-   * 选中 / 取消选中一个知识点（P-A8：卡片 ↔ 图谱联动）。
-   *
-   * 传 `null` 取消选中。点同一个 id 两次由调用方决定语义（面板里是"再点一次取消"）。
-   */
-  focusNode: (knowledgePointId: string | null) => void;
-}
+export type {
+  ActionKey,
+  FailedAction,
+  GapRecord,
+  Notice,
+  QuizReportOutcome,
+  TutorTurn,
+  UiMaterial,
+  Workbench,
+  WorkbenchActions,
+  WorkbenchState,
+} from '../app/model/workbench-types';
 
 function newId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -278,10 +120,13 @@ function toNotice(error: unknown, fallback: string): Notice {
   return { kind: 'error', text: fallback };
 }
 
-/** 材料文本合计，用于上限提示（§2.2） */
-export function totalTextLength(materials: { text: string }[]): number {
-  return materials.reduce((sum, item) => sum + item.text.length, 0);
-}
+/**
+ * 材料文本合计 —— 已移到 `app/model/materials.ts`（2026-09-23 解耦改造）。
+ *
+ * 移动原因：`MaterialPanel` 需要它，而 `components → hooks` 的依赖方向被
+ * `panels-should-not-import-state-internals` 禁止。这里保留**再导出**。
+ */
+export { totalTextLength } from '../app/model/materials';
 
 /** 动作的中文名，用于"上一个操作还没完成"这类提示 */
 const ACTION_LABELS: Record<ActionKey, string> = {
@@ -293,20 +138,13 @@ const ACTION_LABELS: Record<ActionKey, string> = {
 };
 
 /**
- * 是否展示「重试」按钮（`I20⑤`）。
+ * 是否展示「重试」按钮 —— 已移到 `app/model/notice.ts`（2026-09-23 解耦改造）。
  *
- * 两个条件**缺一不可**：
- * 1. `canRetry` —— 上一次动作确实失败过（否则没有可重放的动作）；
- * 2. 当前这条提示本身带 `retryable` —— 它是服务端标为可重试的那次失败。
- *
- * 只有第 1 条时，任何一条普通提示（"已按修正后的内容重建…"，
- * 甚至"上一个操作还没完成"这种**并非失败**的提示）都会被挂上「重试」，
- * 点下去重放的是与它无关的旧动作。抽成纯函数是为了让这条语义能被断言，
- * 而不是只靠读代码确认。
+ * 移动原因：外壳组件（`components/AppShell.tsx`）也要用这条判据，而
+ * `components → hooks` 的依赖方向被 `panels-should-not-import-state-internals` 禁止。
+ * 这里保留**再导出**，让既有调用点（含 `scripts/verify-render.tsx` 的真值表断言）继续可用。
  */
-export function shouldOfferRetry(notice: Notice | null, canRetry: boolean): boolean {
-  return canRetry && notice?.retryable === true;
-}
+export { shouldOfferRetry } from '../app/model/notice';
 
 export function useWorkbench(): WorkbenchState & WorkbenchActions {
   const [sessionId, setSessionId] = useState<string | null>(null);

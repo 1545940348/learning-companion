@@ -11,7 +11,7 @@
 import { useState } from 'react';
 import type { Citation, KnowledgePoint, PrerequisiteRelation } from '@lc/contracts';
 import { KNOWLEDGE_CARD_RANGE } from '@lc/contracts';
-import type { GapRecord, WorkbenchActions, WorkbenchState } from '../hooks/useWorkbench';
+import type { GapRecord, WorkbenchActions, WorkbenchState } from '../app/model/workbench-types';
 import {
   NEEDS_SUPPLEMENT,
   SOURCE_LABELS,
