@@ -20,6 +20,7 @@ import type {
   QuizRequest,
   QuizResponse,
   Session,
+  TeacherResponse,
   TutorRequest,
   TutorResponse,
 } from '@lc/contracts';
@@ -196,4 +197,14 @@ export const api = {
 
   profile: (payload: ProfileRequest) =>
     request<ProfileResponse>('/profile', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /**
+   * 教师视图：班级聚合（`P-A6` 接入，2026-09-23）。
+   *
+   * ⚠️ `classId` 在服务端是**回显值** —— 没有班级实体，当前进程内的会话视为一个班。
+   * 这一点必须和界面文案一致（界面写「演示级：当前所有会话视为一个班」），
+   * 否则就成了"假装有组织关系"。
+   */
+  teacher: (classId: string) =>
+    request<TeacherResponse>(`/teacher?${new URLSearchParams({ classId }).toString()}`),
 };

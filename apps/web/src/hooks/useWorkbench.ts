@@ -30,6 +30,7 @@ import { clearProgress, loadProgress, saveProgress } from '../shared/lib/persist
 import { readImageFile } from '../shared/lib/image-input';
 import { totalTextLength } from '../app/model/materials';
 import { loadEntries, saveEntries, trimTurns, upsertEntry } from '../app/model/session-history';
+import { DEMO_CLASS_ID } from '../app/model/workbench-types';
 
 /**
  * 类型已搬到 `app/model/workbench-types.ts`（2026-09-23 解耦改造）。
@@ -44,6 +45,7 @@ import { loadEntries, saveEntries, trimTurns, upsertEntry } from '../app/model/s
  */
 import type {
   ActionKey,
+  ClassAggregate,
   FailedAction,
   GapRecord,
   Notice,
@@ -138,6 +140,7 @@ const ACTION_LABELS: Record<ActionKey, string> = {
   tutor: '解答问题',
   quiz: '获取练习',
   profile: '读取画像',
+  teacher: '读取班级聚合',
 };
 
 /**
@@ -177,6 +180,11 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
    * 而不是先渲染成空、再"跳"出来。
    */
   const [historyEntries, setHistoryEntries] = useState<SessionHistoryEntry[]>(() => loadEntries());
+  /**
+   * 教师视图的班级聚合（`P-A6`，2026-09-23）。**按需拉取** ——
+   * 它是跨会话的视图，跟着当前会话同步刷新没有意义（还会白花一次请求）。
+   */
+  const [teacher, setTeacher] = useState<ClassAggregate | null>(null);
 
   /**
    * 版本护栏的锚点。
@@ -877,6 +885,30 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     }
   }, [begin, clearFailure, end, rememberFailure]);
 
+  /* ---------- 教师视图：班级聚合（P-A6，2026-09-23） ---------- */
+
+  /**
+   * 拉取班级聚合。
+   *
+   * ### 为什么 `classId` 写死成 `DEMO_CLASS_ID`
+   *
+   * 服务端**没有班级实体**，`classId` 只是**回显值**（见 `aggregateClass` 的注释）。
+   * 这里传固定值，而不是在界面上造一个「选择班级」的下拉 —— 那会让演示看起来像
+   * "有多个班可选"，而实际上是同一个池子。真要支持多班，得先有"学生 → 班级"的归属，
+   * 那是另一件事（且需要契约变更）。
+   */
+  const fetchTeacher = useCallback(async () => {
+    if (!begin('teacher')) return;
+    try {
+      setTeacher(await api.teacher(DEMO_CLASS_ID));
+      clearFailure();
+    } catch (error) {
+      rememberFailure({ kind: 'teacher' }, toNotice(error, '读取班级聚合失败。'));
+    } finally {
+      end('teacher');
+    }
+  }, [begin, clearFailure, end, rememberFailure]);
+
   /* ---------- 开始新学习（§2.4） ---------- */
 
   const startNewStudy = useCallback(async () => {
@@ -1064,6 +1096,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     parseUnavailable,
     focusedNodeId,
     historyEntries,
+    teacher,
     submitMaterials,
     submitImage,
     correctMaterial,
@@ -1074,6 +1107,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     reportQuizAttempt,
     refreshGraph,
     fetchProfile,
+    fetchTeacher,
     startNewStudy,
     switchSession,
     dismissNotice,

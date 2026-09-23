@@ -18,6 +18,8 @@ import type {
   LearnerProfile,
   Material,
   ProfileEvent,
+  ClassAggregate,
+  MisconceptionKind,
   Session,
   SessionGraph,
   SessionSummary,
@@ -78,6 +80,90 @@ export function listSessionSummaries(): SessionSummary[] {
       materialCount: session.materials.length,
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+}
+
+/* ==================== 班级聚合（P-C11，阶段三） ==================== */
+
+/** 六态计数器（全 0）；`aggregateClass` 用它初始化每个概念的分布 */
+function emptyStatusCount(): Record<PrerequisiteStatus, number> {
+  return { LOCAL: 0, SUPPLEMENTED: 0, MISSING: 0, PENDING: 0, VERIFIED: 0, DISPUTED: 0 };
+}
+
+/**
+ * 班级聚合：把当前进程内的会话汇总成**只含计数与概念维度**的班级视图（`P-C11`）。
+ *
+ * ### 演示级的"班级"到底是什么（这条必须说清）
+ *
+ * 契约里 `TeacherQuery { classId }` 一直存在，但**服务端从来没有班级实体** ——
+ * 会话只按 `sessionId` 存，没有"这个学生属于哪个班"的概念。
+ * 本实现**不假装有班级**：把**当前进程内所有会话视为一个班**，`classId` 原样回显
+ * （不校验、不编造、不写入），并把这一点写进接口文档。
+ *
+ * 之所以这样做而不是"先造个班级实体"：演示要的是**真实数据的聚合**，
+ * 不是**编出来的组织关系**。样本量由 `studentCount` 如实报出，
+ * 低于 `TEACHER_MIN_SAMPLE`（5）时由消费方提示「样本不足」（§11 边界）。
+ *
+ * ### 为什么只输出这三样
+ *
+ * 契约对 `ClassAggregate` 的定义是「**只含计数与概念维度统计**，不含个人信息（用例 E17）」。
+ * 所以这里只给：**状态分布 / 误区排行 / 覆盖热度** ——
+ * 十进制的计数不会反推到任何具体学生，`studentCount` 也只是一个总数。
+ */
+export function aggregateClass(classId: string): ClassAggregate {
+  const mastery: Record<string, Record<PrerequisiteStatus, number>> = {};
+  const misconceptionMap = new Map<
+    string,
+    { kind: MisconceptionKind; pattern: string; count: number }
+  >();
+  const coverageHeat: { materialId: string; conceptId: string; covered: boolean }[] = [];
+
+  for (const session of sessions.values()) {
+    const profile = profiles.get(session.id);
+    if (profile) {
+      /* ① 掌握状态分布：概念 → 状态 → 人数 */
+      for (const [conceptId, status] of Object.entries(profile.mastery)) {
+        mastery[conceptId] = mastery[conceptId] ?? emptyStatusCount();
+        mastery[conceptId][status] += 1;
+      }
+
+      /* ② 误区排行：按 `kind + pattern` 合并计数 —— 只合并**字面相同**的，不做语义归并 */
+      for (const item of profile.misconceptions) {
+        const key = `${item.kind}|${item.pattern}`;
+        const existing = misconceptionMap.get(key);
+        if (existing) existing.count += item.count;
+        else misconceptionMap.set(key, { kind: item.kind, pattern: item.pattern, count: item.count });
+      }
+    }
+
+    /* ③ 覆盖热度：每份材料 × 每个图谱节点，是否判为「材料已覆盖」 */
+    for (const material of session.materials) {
+      for (const node of session.graph.nodes) {
+        coverageHeat.push({
+          materialId: material.id,
+          conceptId: node.id,
+          /*
+           * 判据与图谱同源：`KnowledgePoint` **没有 `status` 字段**（六态属于**前置关系**），
+           * 所以「材料是否覆盖」只能按图谱自己的口径判 —— 与 `GraphPanel.nodeStatus` 的
+           * "第 3 条来源"一致：**有 `citations` ⇒ 能定位来源 ⇒ 已覆盖**。
+           * 没有引用时**不算覆盖**，免得把"模型没给引用"说成"材料覆盖了"。
+           */
+          covered: node.citations.length > 0,
+        });
+      }
+    }
+  }
+
+  return {
+    classId,
+    /* 样本量 = 有画像的会话数（画像按 sessionId 存，这也是"一个学生"的粒度） */
+    studentCount: profiles.size,
+    mastery,
+    misconceptions: [...misconceptionMap.values()].sort(
+      (a, b) => b.count - a.count || a.pattern.localeCompare(b.pattern),
+    ),
+    coverageHeat,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function clearSessions(): void {

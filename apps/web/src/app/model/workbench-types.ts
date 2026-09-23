@@ -18,6 +18,7 @@
  */
 
 import type {
+  ClassAggregate,
   GraphNeighborhood,
   KnowledgePoint,
   LearnerProfile,
@@ -31,6 +32,14 @@ import type {
   TutorResponse,
   VerificationStatus,
 } from '@lc/contracts';
+
+/**
+ * 面板与状态层共用的契约类型，从这里**再导出**一次。
+ *
+ * 沿用本文件的定位（"类型的单一出口"）：面板不必各自去 `@lc/contracts` 里挑，
+ * 也不会出现"同一个类型两处各引一份"。
+ */
+export type { ClassAggregate };
 
 /**
  * 界面上的一份材料。
@@ -56,7 +65,16 @@ export type UiMaterial = Material & {
 };
 
 /** 正在进行的动作。**门控按钮要用 `isBusy(key)`，不要用 `busy`**（见其注释） */
-export type ActionKey = 'knowledge' | 'gap' | 'tutor' | 'quiz' | 'profile';
+export type ActionKey = 'knowledge' | 'gap' | 'tutor' | 'quiz' | 'profile' | 'teacher';
+
+/**
+ * 教师视图用的班级 id（`P-A6`，2026-09-23）。
+ *
+ * ⚠️ 它只是个**回显值**：服务端**没有班级实体**，把当前进程内的会话视为一个班。
+ * 抽成常量是为了让"**这里只有一个班**"这件事在代码里就看得见，
+ * 而不是散落成一个写死的字符串（那样后人会以为真能传别的班）。
+ */
+export const DEMO_CLASS_ID = 'demo';
 
 /**
  * 上一次失败、且服务端标记为可重试的动作。
@@ -68,7 +86,8 @@ export type FailedAction =
   | { kind: 'knowledge'; texts: string[] }
   | { kind: 'gap'; conceptId: string; reason: string }
   | { kind: 'tutor'; question: string; mode: TutorMode }
-  | { kind: 'profile' };
+  | { kind: 'profile' }
+  | { kind: 'teacher' };
 
 /** 一次缺口补充的结果，按 conceptId 归档（§3.4） */
 export interface GapRecord {
@@ -147,6 +166,11 @@ export interface WorkbenchState {
    */
   historyEntries: SessionHistoryEntry[];
   profile: LearnerProfile | null;
+  /**
+   * 教师视图的班级聚合（`P-A6`，2026-09-23）。**按需拉取**（进教师视图时才请求），
+   * 不跟当前会话的生命周期走 —— 它是**跨会话**的视图，绑在某个会话上没有意义。
+   */
+  teacher: ClassAggregate | null;
   notice: Notice | null;
   /**
    * 最近**开始**的动作，仅用于显示"正在…"的文案。
@@ -219,6 +243,14 @@ export interface WorkbenchActions {
   }) => Promise<QuizReportOutcome>;
   refreshGraph: (knowledgePointId?: string) => Promise<void>;
   fetchProfile: () => Promise<void>;
+  /**
+   * 拉取教师视图的班级聚合（`P-A6`）。
+   *
+   * ⚠️ 服务端**没有班级实体**：`classId` 只是回显值，当前进程内的会话视为一个班。
+   * 这一条与 `aggregateClass` 的注释、`TeacherPanel` 的界面文案**三处一致** ——
+   * 不假装有组织关系。
+   */
+  fetchTeacher: () => Promise<void>;
   startNewStudy: () => Promise<void>;
   /**
    * 切换到**本标签页归档过的**某个会话（`P2-2`，2026-09-23）。

@@ -25,8 +25,15 @@ import {
 } from '../app/model/conversation';
 import { Icon, type IconName } from './Icon';
 
-/** 主区六种视图，与六面板一一对应 */
-export type ViewKey = 'chat' | 'material' | 'knowledge' | 'graph' | 'quiz' | 'profile';
+/** 主区七种视图，与七面板一一对应（`teacher` 于 2026-09-23 随 `P-A6` 加入） */
+export type ViewKey =
+  | 'chat'
+  | 'material'
+  | 'knowledge'
+  | 'graph'
+  | 'quiz'
+  | 'profile'
+  | 'teacher';
 
 export const VIEW_LABELS: Record<ViewKey, string> = {
   chat: '对话',
@@ -35,6 +42,7 @@ export const VIEW_LABELS: Record<ViewKey, string> = {
   graph: '图谱',
   quiz: '练习',
   profile: '画像',
+  teacher: '教师',
 };
 
 const FEATURE_ITEMS: { key: Exclude<ViewKey, 'chat'>; icon: IconName }[] = [
@@ -43,6 +51,7 @@ const FEATURE_ITEMS: { key: Exclude<ViewKey, 'chat'>; icon: IconName }[] = [
   { key: 'graph', icon: 'graph' },
   { key: 'quiz', icon: 'target' },
   { key: 'profile', icon: 'chart' },
+  { key: 'teacher', icon: 'users' },
 ];
 
 type Props = {

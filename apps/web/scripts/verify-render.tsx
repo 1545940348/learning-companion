@@ -26,6 +26,7 @@ import type { GraphNeighborhood, HealthResponse, LearnerProfile } from '@lc/cont
 import type {
   GapRecord,
   TutorTurn,
+  ClassAggregate,
   SessionHistoryEntry,
   UiMaterial,
   WorkbenchActions,
@@ -48,6 +49,7 @@ import { QuizPanel } from '../src/components/QuizPanel';
 import { ConversationView } from '../src/components/ConversationView';
 import { AppShell } from '../src/components/AppShell';
 import { SidebarNav } from '../src/components/SidebarNav';
+import { TeacherPanel } from '../src/components/TeacherPanel';
 import {
   deriveSessionLabel,
   describePending,
@@ -1274,6 +1276,64 @@ console.log('\n--- 10. 会话归档：上限、排序确定、容错、左栏历
     <SidebarNav wb={makeWb()} view="chat" onViewChange={() => {}} />,
   );
   check('★ 没有历史时整组不出现（不留空壳标题）', !navNoHistory.includes('历史会话'));
+}
+
+/* ==================== 11. 教师视图（P-A6，2026-09-23） ==================== */
+
+console.log('\n--- 11. 教师视图：样本不足提示、分布表、覆盖热力、脱敏 ---');
+{
+  const aggregate = (students: number): ClassAggregate => ({
+    classId: 'demo',
+    studentCount: students,
+    mastery: {
+      'kp-monotonicity': {
+        LOCAL: 2,
+        SUPPLEMENTED: 1,
+        MISSING: 1,
+        PENDING: 0,
+        VERIFIED: 2,
+        DISPUTED: 0,
+      },
+    },
+    misconceptions: [
+      { kind: 'concept-misunderstanding', pattern: '把导数为零当成极值点', count: 3 },
+    ],
+    coverageHeat: [
+      { materialId: 'm-1', conceptId: 'kp-monotonicity', covered: true },
+      { materialId: 'm-1', conceptId: 'kp-derivative', covered: false },
+    ],
+    updatedAt: '2026-09-23T08:00:00.000Z',
+  });
+
+  const empty = render('教师视图（未读取）', <TeacherPanel wb={makeWb()} />);
+  check('★ 未读取时给引导，而不是留一片空白', empty.includes('点「刷新」读取班级聚合'));
+  check(
+    '★★ 始终写明「演示级：当前所有会话视为一个班」—— 否则会被当成真实班级数据',
+    empty.includes('演示级'),
+  );
+  check('★ 样本为 0 时也说清样本不足', empty.includes('样本不足') === false && empty.includes('尚未读取'));
+
+  const few = render(
+    '教师视图（样本不足）',
+    <TeacherPanel wb={makeWb({ teacher: aggregate(2) })} />,
+  );
+  check('★ 样本低于 TEACHER_MIN_SAMPLE 时提示「样本不足」', few.includes('样本不足'));
+  check('★ 样本不足时**不画分布**（2 个学生的分布会被当成结论）', !few.includes('有争议'));
+
+  const enough = render(
+    '教师视图（样本充足）',
+    <TeacherPanel wb={makeWb({ teacher: aggregate(6) })} />,
+  );
+  check('★ 样本够时出现六态表头', enough.includes('已覆盖') && enough.includes('有争议'));
+  check(
+    '★ 覆盖热力用**文字**标注状态（不只靠颜色，色觉差异下也能读）',
+    enough.includes('未覆盖'),
+  );
+  check('★ 误区按其 pattern 渲染', enough.includes('把导数为零当成极值点'));
+  check(
+    '★★ 界面侧也不出现学生标识（脱敏在客户端同样成立）',
+    !/sessionId/.test(enough) && !enough.includes('真实学生'),
+  );
 }
 
 /* ==================== 汇总 ==================== */

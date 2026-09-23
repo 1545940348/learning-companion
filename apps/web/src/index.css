@@ -1447,6 +1447,69 @@ video {
   animation: spin 900ms linear infinite;
 }
 
+/* ==================== 教师视图（P-A6，2026-09-23） ==================== */
+
+.panel-subhead {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.table th,
+.table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+.table th {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.table tr:hover td {
+  background: var(--accent-hover);
+}
+.table code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.heat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.heat-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  transition:
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+.heat-row:hover {
+  border-color: var(--accent);
+  transform: translateX(2px);
+}
+.heat-row-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 /* ══════════════════ 交互动效（2026-09-23 补齐："每个可交互元素都要有反馈"）══════════════════
 
    口径：
@@ -1467,6 +1530,11 @@ video {
 
 .shell-body > * {
   animation: view-in var(--dur-slow) var(--ease) both;
+  /*
+   * 内容少的面板也要撑满主区：教师视图「尚未读取」时只有两行，
+   * 不撑满会看着像"页面断了"（截图走查时发现的）。
+   */
+  min-height: 100%;
 }
 
 @keyframes view-in {
