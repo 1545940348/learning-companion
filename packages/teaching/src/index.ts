@@ -7,7 +7,14 @@
 
 import type { AnswerBlock, QuizItem, ValidatedAnswer } from '@lc/contracts';
 import type { ModelCaller } from './model.js';
-import { answerQuestion, analyzeKnowledge, generateQuizFromMaterial, supplementGap } from './tasks.js';
+import {
+  answerQuestion,
+  analyzeKnowledge,
+  generateQuizFromMaterial,
+  supplementGap,
+  /* 与方法名同名，导入时改名以避免遮蔽（方法是"已绑定 caller"的那一层） */
+  supplementGapWithCorrection as runSupplementWithCorrection,
+} from './tasks.js';
 import type {
   AnalyzeKnowledgeInput,
   AnalyzeKnowledgeOutput,
@@ -16,6 +23,8 @@ import type {
   GenerateQuizInput,
   SupplementGapInput,
   SupplementGapOutput,
+  SupplementVerification,
+  SupplementWithCorrectionResult,
 } from './tasks.js';
 import { validateAnswerBlocks } from './validate.js';
 import type { AllowedRef, ValidateOptions } from './validate.js';
@@ -32,6 +41,19 @@ export interface TeachingModule {
   answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionOutput>;
   analyzeKnowledge(input: AnalyzeKnowledgeInput): Promise<AnalyzeKnowledgeOutput>;
   supplementGap(input: SupplementGapInput): Promise<SupplementGapOutput>;
+  /**
+   * 带**失败修正回环**的缺口补充（`P-B2`，2026-09-23）。
+   *
+   * 与 `supplementGap` 只差一件事：验证 `failed` 时会把失败原因回喂模型**再生成一次**。
+   * 校验函数由调用方注入（服务端传 `symbolic.ts` 的 `verifySupplementContent`）——
+   * 这样这条回环能**脱离符号引擎单独测**（传一个假的 verify 就能覆盖三种分支）。
+   *
+   * ⚠️ **重试过 ≠ 通过**：第二次仍 `failed` 就还是 `failed`，调用方照常落 `DISPUTED`。
+   */
+  supplementGapWithCorrection(
+    input: SupplementGapInput,
+    verify: (draft: { content: string; claims: unknown[] }) => SupplementVerification,
+  ): Promise<SupplementWithCorrectionResult>;
   generateQuizFromMaterial(input: GenerateQuizInput): Promise<QuizItem[]>;
   validateAnswerBlocks(
     blocks: AnswerBlock[],
@@ -46,6 +68,8 @@ export function createTeachingModule(call: ModelCaller): TeachingModule {
     answerQuestion: (input) => answerQuestion(call, input),
     analyzeKnowledge: (input) => analyzeKnowledge(call, input),
     supplementGap: (input) => supplementGap(call, input),
+    supplementGapWithCorrection: (input, verify) =>
+      runSupplementWithCorrection(call, input, verify),
     generateQuizFromMaterial: (input) => generateQuizFromMaterial(call, input),
     validateAnswerBlocks,
   };

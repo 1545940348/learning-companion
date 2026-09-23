@@ -26,6 +26,7 @@ import {
   countSupplementCharacters,
   latexToExpression,
   runFixedCases,
+  supplementGapWithCorrection,
   verifyClaims,
   verifySupplementContent,
 } from '@lc/teaching';
@@ -351,6 +352,98 @@ section('8. I18 一致性断言：commitSupplement 必须拒绝"未验证却标 
     untouched = null;
   }
   check('未验证内容标 SUPPLEMENTED 是合法的（没有被过度收紧）', untouched !== null);
+}
+
+/* ==================== 失败修正回环（P-B2，用例 E14；2026-09-23） ==================== */
+
+console.log('\n=== 失败修正回环：只修一次 / 不隐藏失败 / 重试过≠通过 ===\n');
+
+{
+  const input = {
+    conceptId: 'kp-derivative',
+    conceptName: '导数',
+    reason: '材料未讲',
+    materials: [],
+  };
+
+  /* ① 第一次就通过 ⇒ **不重试**（且只调一次模型 —— 防"无脑先试一次"） */
+  let onceCalls = 0;
+  const onceCaller = async () => {
+    onceCalls += 1;
+    return JSON.stringify({ content: '一次就过的内容', claims: [] });
+  };
+  const passedFirst = await supplementGapWithCorrection(onceCaller, input, () => ({
+    status: 'verified',
+    notes: ['全部通过'],
+  }));
+  check('★ 第一次通过 ⇒ corrected = false', passedFirst.corrected === false);
+  check('★★ 且**只调了一次模型**（不是"先试再判断"）', onceCalls === 1, onceCalls);
+  check('未重试时 firstFailure 为 null', passedFirst.firstFailure === null);
+
+  /* ② 第一次失败、第二次通过 ⇒ 走一次回环 */
+  const retryCaller = (() => {
+    const script = [
+      { content: '错版内容', claims: [] },
+      { content: '修正后的内容', claims: [] },
+    ];
+    let index = 0;
+    return async () => JSON.stringify(script[Math.min(index++, script.length - 1)]);
+  })();
+  let verifyCalls = 0;
+  const corrected = await supplementGapWithCorrection(retryCaller, input, () => {
+    verifyCalls += 1;
+    return verifyCalls === 1
+      ? { status: 'failed', notes: ['单调区间写反了'] }
+      : { status: 'verified', notes: [] };
+  });
+  check('★ 第一次失败 ⇒ 重试一次，corrected = true', corrected.corrected === true);
+  check('★ 返回的是**第二次**的内容', corrected.content === '修正后的内容');
+  check('★ 最终状态取**第二次**的验证结果', corrected.report.status === 'verified');
+  check(
+    '★ 附带第一次的失败原因（不隐藏：界面要能说"这一版是修正后的"）',
+    typeof corrected.firstFailure === 'string' && corrected.firstFailure.includes('单调区间写反了'),
+    corrected.firstFailure?.slice(0, 40),
+  );
+
+  /* ③ **红线**：两次都失败 ⇒ 仍是 failed */
+  const stillBadCaller = (() => {
+    let index = 0;
+    return async () => JSON.stringify({ content: `第 ${++index} 版`, claims: [] });
+  })();
+  const stillFailed = await supplementGapWithCorrection(stillBadCaller, input, () => ({
+    status: 'failed',
+    notes: ['还是错'],
+  }));
+  check(
+    '★★ 两次都失败 ⇒ **仍是 failed**（"重试过"不等于"通过"）',
+    stillFailed.report.status === 'failed',
+    stillFailed.report.status,
+  );
+  check('★ 但仍如实标记走过重试', stillFailed.corrected === true);
+
+  /* ④ 第二次的提示词里确实带上了失败原因，且**不含诱导措辞** */
+  let secondPrompt = '';
+  const promptCaller = (() => {
+    let index = 0;
+    return async (prompt) => {
+      index += 1;
+      if (index === 2) secondPrompt = prompt;
+      return JSON.stringify({ content: `第 ${index} 版`, claims: [] });
+    };
+  })();
+  await supplementGapWithCorrection(promptCaller, input, () => ({
+    status: 'failed',
+    notes: ['把 f′(x) > 0 误写成 f(x) > 0'],
+  }));
+  check('★ 第二次的提示词里带上了失败原因', secondPrompt.includes('把 f′(x) > 0 误写成 f(x) > 0'));
+  check(
+    '★★ 提示词里**不许**出现"请通过验证"这类诱导措辞（真实性红线：不许为过关而改口径）',
+    !secondPrompt.includes('请通过') && !secondPrompt.includes('务必通过') && !secondPrompt.includes('必须通过'),
+  );
+  check(
+    '★ 第二次的提示词里仍带着学生材料（不只是"改错"）',
+    secondPrompt.includes('学生当前材料'),
+  );
 }
 
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);

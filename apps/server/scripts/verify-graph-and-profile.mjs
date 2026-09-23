@@ -458,6 +458,101 @@ console.log('\n=== 会话摘要：只列元信息、排序确定、不泄露正�
 
 /* ==================== 汇总 ==================== */
 
+/* ==================== 14. 概念别名归一（P-B12，2026-09-23） ==================== */
+
+console.log('\n=== 14. 概念别名归一：同义合并 / 边重指 / 自环清除 / 不越界 ===\n');
+
+{
+  /* ① 明确同义（导数／微商）→ 合成一个节点，留下先出现的那个 id */
+  const synonyms = {
+    points: [point('kp-derivative', { name: '导数' }), point('kp-micro', { name: '微商' })],
+    prerequisites: [],
+    graph: { edges: [] },
+  };
+  const mergedOne = await analyzeKnowledge(fakeCall(synonyms), { materials: [] });
+  check(
+    '★ 同义概念（导数／微商）合并为一个节点',
+    mergedOne.graph.nodes.length === 1,
+    mergedOne.graph.nodes.length,
+  );
+  check(
+    '★ 留下的是**先出现**的那个（id 由模型给，顺序就是唯一可依赖的信息）',
+    mergedOne.graph.nodes[0]?.id === 'kp-derivative',
+    mergedOne.graph.nodes[0]?.id,
+  );
+
+  /* ② 书写形式差异（空格 / 大小写 / 全角括号）也归一到一起 */
+  const spacing = {
+    points: [point('a', { name: '洛必达法则' }), point('b', { name: ' 洛必达法则 ' })],
+    prerequisites: [],
+    graph: { edges: [] },
+  };
+  const spaced = await analyzeKnowledge(fakeCall(spacing), { materials: [] });
+  check('★ 只差空格／大小写的同名概念合并为一个', spaced.graph.nodes.length === 1);
+  check('★ 合并后**不改名**（保留先出现那个的原文）', spaced.graph.nodes[0]?.name === '洛必达法则');
+
+  /* ③ 边重指：入边与出边都要改指到主 id */
+  const withEdges = {
+    points: [point('kp-derivative', { name: '导数' }), point('kp-micro', { name: '微商' })],
+    prerequisites: [],
+    graph: {
+      edges: [edge('kp-monotonicity', 'kp-micro'), edge('kp-micro', 'kp-limit')],
+    },
+  };
+  const rewired = await analyzeKnowledge(fakeCall(withEdges), { materials: [] });
+  const pairs = rewired.graph.edges.map((item) => `${item.from}->${item.to}`);
+  check(
+    '★ 指向被合并 id 的边改指到主 id',
+    pairs.includes('kp-monotonicity->kp-derivative'),
+    pairs.join(' , '),
+  );
+  check('★ 从被合并 id 出发的边也改指', pairs.includes('kp-derivative->kp-limit'), pairs.join(' , '));
+  check(
+    '★ 图里不再出现被合并的 id（否则缺口判定会重复）',
+    !JSON.stringify(rewired.graph).includes('kp-micro'),
+  );
+
+  /* ④ 合并**产生**的自环必须消失 —— 这条专锁归一顺序 */
+  const selfLoop = {
+    points: [point('kp-derivative', { name: '导数' }), point('kp-micro', { name: '微商' })],
+    prerequisites: [],
+    graph: { edges: [edge('kp-derivative', 'kp-micro')] },
+  };
+  const deduped = await analyzeKnowledge(fakeCall(selfLoop), { materials: [] });
+  check(
+    '★★ 合并产生的自环被去掉（顺序必须是：先合并 → 再删自环 → 最后排环）',
+    deduped.graph.edges.length === 0,
+    deduped.graph.edges.length,
+  );
+
+  /* ⑤ 反例：**不同义**的不许合并（防"过度归一"造出不存在的概念） */
+  const distinct = {
+    points: [
+      point('kp-derivative', { name: '导数' }),
+      point('kp-differential', { name: '微分' }),
+      point('kp-integral', { name: '积分' }),
+      point('kp-partial', { name: '偏导数' }),
+    ],
+    prerequisites: [],
+    graph: { edges: [] },
+  };
+  const notMerged = await analyzeKnowledge(fakeCall(distinct), { materials: [] });
+  check(
+    '★★ 不同义的概念**不**合并（导数／微分／积分／偏导数 仍是 4 个节点）',
+    notMerged.graph.nodes.length === 4,
+    notMerged.graph.nodes.length,
+  );
+
+  /* ⑥ 英文名与中文名同义时合并 */
+  const bilingual = {
+    points: [point('p1', { name: 'derivative' }), point('p2', { name: '导数' })],
+    prerequisites: [],
+    graph: { edges: [] },
+  };
+  const mergedBilingual = await analyzeKnowledge(fakeCall(bilingual), { materials: [] });
+  check('★ 英文名与中文名同义时也合并', mergedBilingual.graph.nodes.length === 1);
+}
+
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);
 if (failed > 0) {
   process.exitCode = 1;
