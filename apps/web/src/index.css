@@ -1,20 +1,35 @@
 :root {
+  /* ═══ 配色只有三个色族（2026-09-23 收敛）════════════════════════════════
+     ① 白族（中性）：--bg / --card / --text / --text-muted / --border
+     ② 绿：唯一主色 —— 按钮、选中、链接、信息提示、成功都用它（--accent 系）
+     ③ 黄：唯一强调色 —— 警告与**错误**共用黄族，错误只是加深一档
+
+     原先还有两个色族，已并入上面：
+     - 「红（错误）」→ 更深一档的黄：靠**文案与图标**区分"警告 vs 失败"，不再靠颜色；
+     - 「蓝（信息）」→ 绿族：像"正在处理中"这种事本来就不是警告，用主色更合适。
+
+     ⚠️ 想再加一个颜色之前，先按项目判据问一遍：**这里是不是有冗余内容可以先删？**
+     （用户口径：省不下来的颜色，先当成"存在冗余"来查。）
+     ════════════════════════════════════════════════════════════════════ */
   --bg: #f7f7f5;
   --card: #ffffff;
   --text: #1f1f1d;
   --text-muted: #6b6b66;
   --border: #e2e1dc;
+  /* 绿 */
   --accent: #0f6e56;
   --accent-soft: #e1f5ee;
   --btn-text: #ffffff;
-  --warn-bg: #fdf0d5;
-  --warn-text: #854f0b;
-  --err: #a32d2d;
-  --err-bg: #fcebeb;
   --ok: #0f6e56;
   --ok-bg: #e1f5ee;
-  --info-bg: #e6f1fb;
-  --info-text: #185fa5;
+  /* 黄（错误同为黄族，加深一档）*/
+  --warn-bg: #fdf0d5;
+  --warn-text: #854f0b;
+  --err-bg: #f7e0b0;
+  --err: #77460a;
+  /* 信息并入绿族 */
+  --info-bg: #e1f5ee;
+  --info-text: #0b5a46;
   --radius: 12px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -26,17 +41,20 @@
     --text: #ececf1;
     --text-muted: #9d9daa;
     --border: #31313a;
+    /* 绿 */
     --accent: #5dcaa5;
     --accent-soft: #123a2f;
     --btn-text: #08211a;
-    --warn-bg: #3a2d0c;
-    --warn-text: #f0c96a;
-    --err: #f09595;
-    --err-bg: #3a1b1b;
     --ok: #5dcaa5;
     --ok-bg: #123a2f;
-    --info-bg: #10263a;
-    --info-text: #85b7eb;
+    /* 黄（错误同为黄族，加深一档）*/
+    --warn-bg: #3a2d0c;
+    --warn-text: #f0c96a;
+    --err-bg: #4a3908;
+    --err: #f7cd63;
+    /* 信息并入绿族 */
+    --info-bg: #123a2f;
+    --info-text: #7ee0b8;
   }
 }
 
@@ -1429,16 +1447,208 @@ video {
   animation: spin 900ms linear infinite;
 }
 
+/* ══════════════════ 交互动效（2026-09-23 补齐："每个可交互元素都要有反馈"）══════════════════
+
+   口径：
+   - 一律只动 `transform / opacity / background / color / border-color / box-shadow`
+     —— **不动布局属性**（宽高、margin、padding），否则长列表会掉帧；
+   - 时长 120–260ms，缓动统一 `--ease`；**不用弹跳**（"经典"而非"活泼"）；
+   - 键盘可达性不靠动效表达（选中态仍有 `aria-current`）；
+   - `prefers-reduced-motion` 下**全部**降级（见文件末尾的通配符规则）。
+   ══════════════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --dur-fast: 120ms;
+  --dur-slow: 260ms;
+  --lift: -2px;
+}
+
+/* ---------- 1 视图切换：主区内容淡入上移（条件渲染 → 重新挂载 → 动画重放） ---------- */
+
+.shell-body > * {
+  animation: view-in var(--dur-slow) var(--ease) both;
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 2 按下反馈：所有按钮轻微缩放 ---------- */
+
+button {
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* ---------- 3 悬停上浮：卡片与主按钮 ---------- */
+
+.kp-card,
+.material-item,
+.profile-row,
+.quiz-item,
+.option,
+.btn {
+  transition:
+    transform var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+.btn:hover:not(:disabled),
+.kp-card:hover,
+.material-item:hover,
+.profile-row:hover,
+.quiz-item:hover {
+  transform: translateY(var(--lift));
+}
+
+.btn:hover:not(:disabled) {
+  box-shadow: 0 4px 14px rgba(15, 110, 86, 0.16);
+}
+.kp-card:hover,
+.material-item:hover,
+.quiz-item:hover {
+  border-color: var(--accent);
+  box-shadow: 0 6px 20px rgba(15, 110, 86, 0.1);
+}
+
+/* ---------- 4 左栏项：悬停微移 ---------- */
+
+.side-item:hover,
+.side-new:hover:not(:disabled) {
+  transform: translateX(2px);
+}
+
+/* ---------- 5 输入框聚焦：主色描边 ---------- */
+
+.input,
+.composer-input {
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-hover);
+  outline: none;
+}
+
+/* ---------- 6 通知与提示条：自上滑入 ---------- */
+
+.notice,
+.warn-inline,
+.shell-banner,
+.composer-status {
+  animation: notice-in var(--dur-slow) var(--ease) both;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 7 列表逐项入场（stagger）：对话消息与知识点卡片 ---------- */
+
+.conv-scroll > *,
+.card-grid > *,
+.material-list > * {
+  animation: item-in var(--dur) var(--ease) both;
+}
+
+@keyframes item-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.conv-scroll > *:nth-child(2),
+.card-grid > *:nth-child(2),
+.material-list > *:nth-child(2) {
+  animation-delay: 35ms;
+}
+.conv-scroll > *:nth-child(3),
+.card-grid > *:nth-child(3),
+.material-list > *:nth-child(3) {
+  animation-delay: 70ms;
+}
+.conv-scroll > *:nth-child(4),
+.card-grid > *:nth-child(4),
+.material-list > *:nth-child(4) {
+  animation-delay: 105ms;
+}
+.conv-scroll > *:nth-child(5),
+.card-grid > *:nth-child(5),
+.material-list > *:nth-child(5) {
+  animation-delay: 140ms;
+}
+.conv-scroll > *:nth-child(n + 6),
+.card-grid > *:nth-child(n + 6),
+.material-list > *:nth-child(n + 6) {
+  animation-delay: 175ms;
+}
+
+/* ---------- 8 折叠区展开：内容淡入 ---------- */
+
+.side-note[open] .side-note-body {
+  animation: notice-in var(--dur) var(--ease) both;
+}
+
+/* ---------- 9 标签与徽标：状态变化时背景平滑过渡 ---------- */
+
+.tag,
+.badge,
+.cite-badge,
+.mode,
+.option,
+.side-badge {
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.cite-badge:hover {
+  transform: scale(1.12);
+}
+
+/* ══════════════════ 动效降级（必须放最后，用通配符保证"一个都不漏"）══════════════════ */
+
 @media (prefers-reduced-motion: reduce) {
-  .msg,
-  .spin,
-  .side-item,
-  .side-new,
-  .sample,
-  .icon-btn,
-  .side-note summary::before {
-    animation: none;
-    transition: none;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

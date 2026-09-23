@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "note": "全方面测试材料清单（2026-09-23）。供 verify:flow / 人工联调 / 真实通道实测调用，见 README.md。",
+  "materials": [
+    {
+      "id": "basic",
+      "file": "01-basic-derivative.md",
+      "title": "标准讲义：导数的定义与几何意义",
+      "scenario": "最常规的微积分讲义，含导数定义、几何意义与单调性判据",
+      "expect": "抽出多个知识点（导数、切线、单调性），应能形成关系边；应能触发「一键补充」之外的正常路径"
+    },
+    {
+      "id": "prerequisite-gap",
+      "file": "02-monotonicity-only.md",
+      "title": "只有结论、缺前置：单调性判据",
+      "scenario": "直接给了 f'(x)>0 ⇒ 递增 的用法，但**通篇不解释导数是什么**",
+      "expect": "应抽出「单调性」并把「导数」标为前置缺口（MISSING）→ 用于测一键补充（POST /api/gap）与补充后的状态流转"
+    },
+    {
+      "id": "formula-heavy",
+      "file": "03-tangent-and-extrema.md",
+      "title": "公式密集：切线方程与极值",
+      "scenario": "含多个可验证断言（求导值、切线方程、单调区间、极值点）",
+      "expect": "公式应被识别为 LaTeX；用于测符号验证四类断言与 SUPPLEMENTED → VERIFIED 的流转"
+    },
+    {
+      "id": "out-of-scope",
+      "file": "04-out-of-scope.md",
+      "title": "超出课程范围：线性代数",
+      "scenario": "矩阵与特征值，与微积分无关",
+      "expect": "应走 out-of-scope 路径（**不得**硬抽出微积分知识点充数）；用于测如实标注"
+    },
+    {
+      "id": "too-long",
+      "file": "05-long.md",
+      "title": "超单次上限（加载时重复 6 次 → >3000 字）",
+      "scenario": "学生一次粘贴了多页讲义",
+      "expect": "加载后长度应超过 MATERIAL_LIMITS.maxSingleInputLength（3000 字）→ 用于测上限提示与「开始新学习」引导",
+      "repeat": 6
+    },
+    {
+      "id": "tiny",
+      "file": "06-tiny.md",
+      "title": "极短：一句话",
+      "scenario": "只贴了一句话",
+      "expect": "边界情况：不应崩、应给出可读的提示（条件不足 / 抽不出知识点）"
+    },
+    {
+      "id": "mixed-language",
+      "file": "07-mixed-language.md",
+      "title": "中英混排",
+      "scenario": "英文教材片段与中文笔记混在一起",
+      "expect": "应能正常抽取；中英术语（derivative / 导数）不应被当成两个不同知识点而重复"
+    },
+    {
+      "id": "ambiguous",
+      "file": "08-ambiguous.md",
+      "title": "表述含糊：只说「变化快慢」",
+      "scenario": "学生自己的笔记，术语不严谨",
+      "expect": "应倾向 PENDING（待确认）而不是硬判成已覆盖；用于测「没有依据不硬判」"
+    },
+    {
+      "id": "with-exercises",
+      "file": "09-with-exercises.md",
+      "title": "含习题：单调区间与极值",
+      "scenario": "讲义后面带了两道练习题",
+      "expect": "用于测练习路径（POST /api/quiz 的 source=material）与画像事件上报"
+    },
+    {
+      "id": "plain-narrative",
+      "file": "10-plain-narrative.md",
+      "title": "纯叙述、无公式",
+      "scenario": "通篇文字说明，一个公式都没有",
+      "expect": "公式应为空数组（**不是**「通道未接入」）；对照图片路径里「这张图没有识别到公式」的口径"
+    }
+  ]
+}

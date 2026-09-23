@@ -410,5 +410,55 @@ console.log('\n=== 会话列表：列出会话、只回摘要 ===\n');
   );
 }
 
+/* ==================== 测试材料库（fixtures/materials，2026-09-23） ==================== */
+
+console.log('\n=== 测试材料库：清单可加载、能跑通真实链路 ===\n');
+{
+  /*
+   * 这一节的作用是给 `fixtures/materials/` 一个**真实消费方**：
+   * 一个只有"清单与文本"的目录，如果没有任何脚本用它，它迟早会烂掉。
+   * 顺手也验证那份"超长材料"**真的**超过单次上限 —— 否则上限那条用例是空跑。
+   */
+  const { listMaterials, loadMaterialText } = await import('../../../fixtures/materials/load.mjs');
+
+  const list = listMaterials();
+  check('★ 清单可读且非空', Array.isArray(list) && list.length >= 8, list.length);
+  check(
+    '★ 每份都有 id / file / scenario / expect（缺一个就不能当测试材料用）',
+    list.every((item) => item.id && item.file && item.scenario && item.expect),
+  );
+  check(
+    '★ id 不重复（重复会让"按 id 取"取错）',
+    new Set(list.map((item) => item.id)).size === list.length,
+  );
+
+  const longText = loadMaterialText('too-long');
+  check(
+    '★ 超长材料确实超过单次上限（3000 字）—— 否则上限那条用例是空跑',
+    longText.length > 3000,
+    longText.length,
+  );
+
+  const fixtureSession = (await call('POST', '/api/session')).json;
+  const fixtureKnowledge = await call('POST', '/api/knowledge', {
+    sessionId: fixtureSession.id,
+    materials: [
+      {
+        id: 'fx-basic',
+        kind: 'upload',
+        text: loadMaterialText('basic'),
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  });
+  check('★ 用测试材料能跑通 /api/knowledge', fixtureKnowledge.status === 200, fixtureKnowledge.status);
+  check(
+    '★ 该材料产出了知识点（不是空结果）',
+    Array.isArray(fixtureKnowledge.json?.points) && fixtureKnowledge.json.points.length > 0,
+    fixtureKnowledge.json?.points?.length,
+  );
+  check('★ 材料版本被推进（材料真的落盘了）', fixtureKnowledge.json?.materialVersion === 1);
+}
+
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);
 process.exitCode = failed > 0 ? 1 : 0;

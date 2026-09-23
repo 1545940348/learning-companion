@@ -149,9 +149,8 @@ export function GraphPanel({ wb }: Props) {
       </header>
 
       {nodes.length === 0 ? (
-        <p className="hint">
-          图谱为空。解析材料后，概念层节点会出现在这里，可点击节点查看它的来源与验证状态。
-        </p>
+        /* 空态只说"没有"，不再解释"节点会怎么出现、可以点什么"（2026-09-23 精简） */
+        <p className="hint">图谱为空 · 解析材料后出现</p>
       ) : (
         <>
           {!hasEdges && (
