@@ -33,7 +33,8 @@ export type IconName =
   | 'refresh'
   | 'stop'
   | 'history'
-  | 'users';
+  | 'users'
+  | 'back';
 
 const PATHS: Record<IconName, ReactElement> = {
   chat: (
@@ -166,6 +167,7 @@ const PATHS: Record<IconName, ReactElement> = {
       <path d="M15.4 5.1a3.2 3.2 0 0 1 0 6.2" />
     </>
   ),
+  back: <path d="M14.5 5.5 8 12l6.5 6.5" />,
 };
 
 export function Icon({

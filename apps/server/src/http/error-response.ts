@@ -46,6 +46,8 @@ export function isRetryableApiCode(code: ApiErrorCode): boolean {
  */
 const API_CODE_STATUS: Readonly<Record<ApiErrorCode, number>> = {
   BAD_REQUEST: 400,
+  /** 未登录／登录失效（演示级账号）；与下面的"内容越权"是两件事 */
+  UNAUTHORIZED: 401,
   /** 内容越权：不得作为正常答案展示（用例 E7） */
   UNAUTHORIZED_CONTENT: 403,
   NOT_FOUND: 404,
@@ -54,7 +56,7 @@ const API_CODE_STATUS: Readonly<Record<ApiErrorCode, number>> = {
   /** 上游故障（认证／额度／请求不合法由具体状态码承载，这里是兜底） */
   MODEL_ERROR: 502,
   MODEL_TIMEOUT: 504,
-  /** 路径存在但功能未交付（如阶段三的教师视图），不得用空数据冒充 */
+  /** 路径存在但功能未交付，不得用空数据冒充 */
   NOT_IMPLEMENTED: 501,
   INTERNAL: 500,
 };

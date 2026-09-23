@@ -26,13 +26,18 @@ const check = (label, ok, detail) => {
   console.log(`  [${ok ? '通过' : '失败'}] ${label}${ok ? '' : ` —— ${JSON.stringify(detail)}`}`);
 };
 
-async function call(method, path, body) {
+async function call(method, path, body, extraHeaders) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(extraHeaders ?? {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  return { status: res.status, json: await res.json().catch(() => null) };
+  return {
+    status: res.status,
+    json: await res.json().catch(() => null),
+    /* 响应头也带出来：账号那节要断言"没有 Set-Cookie"（⇒ 不存在 CSRF 面） */
+    headers: [...res.headers.entries()].map(([key, value]) => `${key}: ${value}`).join('\n'),
+  };
 }
 
 for (let i = 0; i < 60; i += 1) {
@@ -520,6 +525,83 @@ console.log('\n=== 教师视图：班级聚合（只含计数，不反推个人�
     '换一个 classId 仍返回同一批聚合（演示级"一个班"，与 classId 无关）',
     (await call('GET', '/api/teacher?classId=another')).json.studentCount ===
       teacher.json.studentCount,
+  );
+}
+
+/* ==================== 账号（演示级，D7 口径；2026-09-23） ==================== */
+
+console.log('\n=== 账号：登录 / 身份 / 登出（演示级） ===\n');
+{
+  const wrongPassword = await call('POST', '/api/auth/login', {
+    username: 'student',
+    password: 'not-the-password',
+  });
+  check(
+    '★ 口令错 → 401 UNAUTHORIZED',
+    wrongPassword.status === 401 && wrongPassword.json?.error?.code === 'UNAUTHORIZED',
+    wrongPassword.status,
+  );
+
+  const unknownUser = await call('POST', '/api/auth/login', {
+    username: 'nobody-here',
+    password: 'demo',
+  });
+  check(
+    '★★ 用户不存在与口令错**返回同一句话**（否则这就是个账号枚举接口）',
+    unknownUser.status === 401 &&
+      unknownUser.json?.error?.message === wrongPassword.json?.error?.message,
+  );
+
+  check(
+    '缺字段 → 400（入参守卫照常生效）',
+    (await call('POST', '/api/auth/login', { username: 'student' })).status === 400,
+  );
+
+  const ok = await call('POST', '/api/auth/login', { username: 'student', password: 'demo' });
+  check(
+    '★ 正确口令 → 200，返回令牌与账号',
+    ok.status === 200 && typeof ok.json?.token === 'string' && ok.json.token.length > 0,
+    ok.status,
+  );
+  check(
+    '★ 响应里不含口令字段（不回显输入口令，也没有 password 字段）',
+    /* ⚠️ 不能拿 `"demo"` 当特征：`classId` 本来就是 `demo`（与 aggregateClass 同源） */
+    !JSON.stringify(ok.json).includes('"password"') &&
+      !JSON.stringify(ok.json).includes('not-the-password'),
+  );
+  check('★ 角色如实返回（student）', ok.json?.account?.role === 'student');
+  check(
+    '★★ 登录响应**不设 Cookie**（令牌走请求头 ⇒ 不存在 CSRF 面）',
+    !/set-cookie/i.test(ok.headers ?? ''),
+  );
+
+  const me = await call('GET', '/api/auth/me', undefined, { 'X-LC-Token': ok.json.token });
+  check(
+    '★ 带令牌读身份 → 200 且 account 非空',
+    me.status === 200 && me.json?.account?.username === 'student',
+  );
+  check(
+    '★★ 不带令牌 → **200 且 account 为 null**（"还没登录"是正常状态，不是错误）',
+    (await call('GET', '/api/auth/me')).json?.account === null,
+  );
+  check(
+    '★ 乱令牌 → 同样按未登录处理（不报 500）',
+    (await call('GET', '/api/auth/me', undefined, { 'X-LC-Token': 'not-a-real-token' })).json
+      ?.account === null,
+  );
+
+  await call('POST', '/api/auth/logout', undefined, { 'X-LC-Token': ok.json.token });
+  check(
+    '★ 登出后同一令牌立即失效',
+    (await call('GET', '/api/auth/me', undefined, { 'X-LC-Token': ok.json.token })).json
+      ?.account === null,
+  );
+
+  const teacher = await call('POST', '/api/auth/login', { username: 'teacher', password: 'demo' });
+  check('★ teacher 账号角色为 teacher', teacher.json?.account?.role === 'teacher');
+  check(
+    '★ 两个账号的 classId 一致（与 aggregateClass 的口径同源）',
+    teacher.json?.account?.classId === 'demo',
   );
 }
 

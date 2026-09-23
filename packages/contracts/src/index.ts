@@ -10,6 +10,8 @@ export * from './knowledge.js';
 export * from './tutor.js';
 export * from './quiz.js';
 export * from './profile.js';
+// 账号与登录（演示级，见 auth.ts 顶部的三条说明）
+export * from './auth.js';
 export * from './api.js';
 // 模型调用接口（C 实现并注入；供服务端适配层与教学模块共用）
 export * from './model.js';

@@ -35,6 +35,13 @@ export type ApiErrorCode =
    * 也会掩盖"以空数据冒充已实现"的问题（§9）。
    */
   | 'NOT_IMPLEMENTED'
+  /**
+   * 未登录／登录失效（2026-09-23 新增，随演示级账号）。
+   *
+   * 与 `UNAUTHORIZED_CONTENT` 分开：那个说的是"**引用了未经授权的材料**"（用例 E7），
+   * 这个说的是"**当前请求没有有效身份**"。混用会让前端分不清该"重新登录"还是"改引用"。
+   */
+  | 'UNAUTHORIZED'
   | 'INTERNAL';
 
 export interface ApiErrorBody {
@@ -283,3 +290,11 @@ export type { TeacherResponse };
 export interface TeacherQuery {
   classId: string;
 }
+
+/* ============ 账号：POST /api/auth/login ／ POST /api/auth/logout ／ GET /api/auth/me ============ */
+
+/*
+ * 类型定义在 `auth.ts`，由 `index.ts` 的 `export *` 直接导出。
+ * **这里不再 re-export**：两处同时导出会让 `export *` 产生歧义（同名成员二义），
+ * TypeScript 会直接报 TS2308。
+ */

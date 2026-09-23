@@ -25,7 +25,7 @@ import {
 } from '../app/model/conversation';
 import { Icon, type IconName } from './Icon';
 
-/** 主区七种视图，与七面板一一对应（`teacher` 于 2026-09-23 随 `P-A6` 加入） */
+/** 主区视图（`teacher` 于 2026-09-23 随 `P-A6` 加入；`account` 是**独立一页**，见下） */
 export type ViewKey =
   | 'chat'
   | 'material'
@@ -33,7 +33,12 @@ export type ViewKey =
   | 'graph'
   | 'quiz'
   | 'profile'
-  | 'teacher';
+  | 'teacher'
+  /**
+   * 用户页（2026-09-23）：**独立于学习工作台的一页** ——
+   * 在 `App` 里先于 `AppShell` 分支，所以**不进左栏功能组**，只由左栏底部的用户入口进入。
+   */
+  | 'account';
 
 export const VIEW_LABELS: Record<ViewKey, string> = {
   chat: '对话',
@@ -43,9 +48,11 @@ export const VIEW_LABELS: Record<ViewKey, string> = {
   quiz: '练习',
   profile: '画像',
   teacher: '教师',
+  account: '我的账号',
 };
 
-const FEATURE_ITEMS: { key: Exclude<ViewKey, 'chat'>; icon: IconName }[] = [
+/** 左栏「功能」组的项。⚠️ `Exclude` 里必须带上 `account`，否则类型上会要求给它也留一项 */
+const FEATURE_ITEMS: { key: Exclude<ViewKey, 'chat' | 'account'>; icon: IconName }[] = [
   { key: 'material', icon: 'book' },
   { key: 'knowledge', icon: 'bulb' },
   { key: 'graph', icon: 'graph' },
@@ -157,6 +164,25 @@ export function SidebarNav({ wb, view, onViewChange }: Props) {
             </button>
           );
         })}
+      </div>
+
+      {/*
+        用户入口固定在左栏**底部**：它和上面那组不是一类东西 ——
+        上面是"学习动作"，这里是"账号与延展功能"。分开摆，点进去是**独立一页**。
+      */}
+      <div className="side-group side-group-user">
+        <button
+          className="side-item"
+          data-view="account"
+          onClick={() => onViewChange('account')}
+          title={wb.account ? `${wb.account.displayName}（${wb.account.username}）` : '未登录'}
+        >
+          <Icon name="users" size={16} />
+          <span className="side-label">{wb.account ? wb.account.displayName : '登录 / 我的账号'}</span>
+          {wb.account && (
+            <span className="side-badge">{wb.account.role === 'teacher' ? '师' : '生'}</span>
+          )}
+        </button>
       </div>
     </nav>
   );

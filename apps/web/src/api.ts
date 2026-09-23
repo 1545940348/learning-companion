@@ -13,6 +13,8 @@ import type {
   HealthResponse,
   KnowledgeRequest,
   KnowledgeResponse,
+  LoginResponse,
+  MeResponse,
   ParseRequest,
   ParseResponse,
   ProfileRequest,
@@ -24,6 +26,7 @@ import type {
   TutorRequest,
   TutorResponse,
 } from '@lc/contracts';
+import { readToken } from './app/model/account';
 
 const BASE = '/api';
 
@@ -207,4 +210,43 @@ export const api = {
    */
   teacher: (classId: string) =>
     request<TeacherResponse>(`/teacher?${new URLSearchParams({ classId }).toString()}`),
+
+  /* ---------- 账号（演示级，`D7` 口径；2026-09-23） ---------- */
+
+  /**
+   * 登录。
+   *
+   * 拿到的令牌**不放 Cookie**（浏览器不会自动附带它 ⇒ 无 CSRF 面），
+   * 由调用方写进 `sessionStorage`（`app/model/account.ts`）。
+   */
+  login: (username: string, password: string) =>
+    request<LoginResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+
+  logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST', ...tokenInit() }),
+
+  /**
+   * 读当前身份。
+   *
+   * ⚠️ 未登录时服务端返回 **200 ＋ `account: null`**，不是 401 ——
+   * "还没登录"是正常状态，不该被当成失败去弹重试。
+   */
+  me: () => request<MeResponse>('/auth/me', tokenInit()),
 };
+
+/**
+ * 给请求带上令牌头（**只在请求头里**，不碰 Cookie）。
+ *
+ * 无令牌时返回空对象，让调用方可以无脑展开。
+ */
+function tokenInit(): { headers: Record<string, string> } {
+  const token = readToken();
+  return {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'X-LC-Token': token } : {}),
+    },
+  };
+}

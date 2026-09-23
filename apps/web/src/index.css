@@ -1447,6 +1447,107 @@ video {
   animation: spin 900ms linear infinite;
 }
 
+/* ==================== 用户页 / 登录（2026-09-23） ==================== */
+
+/* 独立一页：自带顶部栏，不套工作台的左栏/主区布局 */
+.account-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  animation: view-in var(--dur-slow) var(--ease) both;
+}
+
+.account-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-blur);
+  backdrop-filter: blur(10px);
+}
+.account-top h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.account-body {
+  flex: 1;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+.account-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.account-form .btn {
+  align-self: flex-start;
+}
+
+/* 账号信息：两列键值表 */
+.kv {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px 12px;
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.kv dt {
+  color: var(--text-muted);
+}
+.kv dd {
+  margin: 0;
+}
+
+.account-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.account-actions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.account-actions li:last-child {
+  border-bottom: none;
+}
+.account-actions strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 14px;
+}
+
+/* 左栏底部：用户入口（和上面的"学习动作"分开摆） */
+.side-group-user {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
 /* ==================== 教师视图（P-A6，2026-09-23） ==================== */
 
 .panel-subhead {

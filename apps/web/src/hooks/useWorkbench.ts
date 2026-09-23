@@ -31,6 +31,7 @@ import { readImageFile } from '../shared/lib/image-input';
 import { totalTextLength } from '../app/model/materials';
 import { loadEntries, saveEntries, trimTurns, upsertEntry } from '../app/model/session-history';
 import { DEMO_CLASS_ID } from '../app/model/workbench-types';
+import { clearToken, readToken, writeToken } from '../app/model/account';
 
 /**
  * 类型已搬到 `app/model/workbench-types.ts`（2026-09-23 解耦改造）。
@@ -44,6 +45,7 @@ import { DEMO_CLASS_ID } from '../app/model/workbench-types';
  * **新代码请直接从 `app/model/workbench-types` 引**，不要再往本文件加类型。
  */
 import type {
+  AccountInfo,
   ActionKey,
   ClassAggregate,
   FailedAction,
@@ -141,6 +143,7 @@ const ACTION_LABELS: Record<ActionKey, string> = {
   quiz: '获取练习',
   profile: '读取画像',
   teacher: '读取班级聚合',
+  auth: '账号操作',
 };
 
 /**
@@ -185,6 +188,12 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
    * 它是跨会话的视图，跟着当前会话同步刷新没有意义（还会白花一次请求）。
    */
   const [teacher, setTeacher] = useState<ClassAggregate | null>(null);
+  /**
+   * 当前账号（`null` = 未登录）。演示级：**未登录照样用学习工作台** ——
+   * 账号只决定用户页显示什么、以及能不能进教师端。`readToken` 在这里只用来
+   * 判断"要不要去问一次服务端"，令牌本身不参与渲染。
+   */
+  const [account, setAccount] = useState<AccountInfo | null>(null);
 
   /**
    * 版本护栏的锚点。
@@ -909,6 +918,67 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     }
   }, [begin, clearFailure, end, rememberFailure]);
 
+  /* ---------- 账号（演示级，`D7` 口径；2026-09-23） ---------- */
+
+  /**
+   * 读一次身份（`App` 挂载时调）。
+   *
+   * ⚠️ 本地有令牌、服务端却说"不认识"时，要**顺手清掉本地令牌** ——
+   * 否则每次启动都会带着一枚死令牌再失败一次，用户也会误以为"还登着"。
+   *
+   * 失败时**不弹提示**：读身份失败（网络断了/服务端没起）时，用户能做的事和
+   * 提示里能写的话都不存在；而未登录本来就能用学习工作台，所以静默降级为未登录。
+   * 本地令牌这时**不清**（这次失败可能只是暂时的，清了会让人白登一次）。
+   */
+  const loadMe = useCallback(async () => {
+    try {
+      const result = await api.me();
+      setAccount(result.account);
+      if (!result.account && readToken()) clearToken();
+    } catch {
+      setAccount(null);
+    }
+  }, []);
+
+  /** 登录：成功返回 `true`；失败把原因写进 `notice` 并返回 `false`（表单据此就地报错） */
+  const login = useCallback(
+    async (username: string, password: string) => {
+      if (!begin('auth')) return false;
+      try {
+        const result = await api.login(username, password);
+        writeToken(result.token);
+        setAccount(result.account);
+        clearFailure();
+        return true;
+      } catch (error) {
+        rememberFailure({ kind: 'auth' }, toNotice(error, '登录失败。'));
+        return false;
+      } finally {
+        end('auth');
+      }
+    },
+    [begin, clearFailure, end, rememberFailure],
+  );
+
+  /**
+   * 登出。
+   *
+   * ⚠️ **无论服务端是否回话，本地一律清干净** —— 停在"看起来登出、其实本地还留着令牌"
+   * 是最糟的中间态；而"服务端没收到登出"的代价只是那枚内存态令牌自然过期。
+   */
+  const logout = useCallback(async () => {
+    if (!begin('auth')) return;
+    try {
+      await api.logout();
+    } catch {
+      /* 有意吞掉：见上面的注释 */
+    } finally {
+      clearToken();
+      setAccount(null);
+      end('auth');
+    }
+  }, [begin, end]);
+
   /* ---------- 开始新学习（§2.4） ---------- */
 
   const startNewStudy = useCallback(async () => {
@@ -1097,6 +1167,7 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     focusedNodeId,
     historyEntries,
     teacher,
+    account,
     submitMaterials,
     submitImage,
     correctMaterial,
@@ -1108,6 +1179,9 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
     refreshGraph,
     fetchProfile,
     fetchTeacher,
+    loadMe,
+    login,
+    logout,
     startNewStudy,
     switchSession,
     dismissNotice,

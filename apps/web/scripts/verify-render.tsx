@@ -26,6 +26,7 @@ import type { GraphNeighborhood, HealthResponse, LearnerProfile } from '@lc/cont
 import type {
   GapRecord,
   TutorTurn,
+  AccountInfo,
   ClassAggregate,
   SessionHistoryEntry,
   UiMaterial,
@@ -50,6 +51,7 @@ import { ConversationView } from '../src/components/ConversationView';
 import { AppShell } from '../src/components/AppShell';
 import { SidebarNav } from '../src/components/SidebarNav';
 import { TeacherPanel } from '../src/components/TeacherPanel';
+import { AccountView } from '../src/components/AccountView';
 import {
   deriveSessionLabel,
   describePending,
@@ -1334,6 +1336,51 @@ console.log('\n--- 11. 教师视图：样本不足提示、分布表、覆盖热
     '★★ 界面侧也不出现学生标识（脱敏在客户端同样成立）',
     !/sessionId/.test(enough) && !enough.includes('真实学生'),
   );
+}
+
+/* ==================== 12. 用户页 / 登录（2026-09-23） ==================== */
+
+console.log('\n--- 12. 用户页：登录表单、账号信息、教师端按角色开放 ---');
+{
+  const accountOf = (
+    username: string,
+    displayName: string,
+    role: 'student' | 'teacher',
+  ): AccountInfo => ({
+    username,
+    displayName,
+    role,
+    classId: 'demo',
+    signedInAt: '2026-09-23T08:00:00.000Z',
+  });
+
+  const guest = render('用户页（未登录）', <AccountView wb={makeWb()} onBack={() => {}} />);
+  check('★ 未登录时给的是登录表单（用户名 ＋ 口令）', guest.includes('用户名') && guest.includes('口令'));
+  check(
+    '★★ 演示账号与缺省口令写在明面上 —— 不写，演示时没人知道该输什么',
+    guest.includes('student') && guest.includes('teacher') && guest.includes('demo'),
+  );
+  check('★ 明说"不登录也能用工作台"', guest.includes('不登录也能直接用学习工作台'));
+
+  const student = render(
+    '用户页（学生已登录）',
+    <AccountView wb={makeWb({ account: accountOf('student', '同学', 'student') })} onBack={() => {}} />,
+  );
+  check('★ 显示用户名与角色', student.includes('student') && student.includes('学生'));
+  check(
+    '★★ 学生看不到教师端按钮，但有**如实说明**（不是把入口藏掉让人以为没这功能）',
+    student.includes('仅教师账号'),
+  );
+
+  const teacher = render(
+    '用户页（教师已登录）',
+    <AccountView wb={makeWb({ account: accountOf('teacher', '老师', 'teacher') })} onBack={() => {}} />,
+  );
+  check(
+    '★ 教师账号能看到教师端的「进入」（且不再显示"仅教师账号"）',
+    teacher.includes('进入') && !teacher.includes('仅教师账号'),
+  );
+  check('★ 有退出登录', teacher.includes('退出登录'));
 }
 
 /* ==================== 汇总 ==================== */
