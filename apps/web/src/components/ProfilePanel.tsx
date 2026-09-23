@@ -24,9 +24,8 @@ export function ProfilePanel({ wb }: Props) {
       </header>
 
       {!wb.sessionId ? (
-        <p className="hint">
-          轻路径提问不产生材料画像。上传讲义并解析后，这里会记录你的缺口与补充情况。
-        </p>
+        /* 只说"为什么这里是空的"这一件事（2026-09-23 精简掉"上传后会记录…"那句解释） */
+        <p className="hint">轻路径不产生材料画像</p>
       ) : (
         <>
           <div className="actions">
@@ -37,9 +36,12 @@ export function ProfilePanel({ wb }: Props) {
           </div>
 
           {mastered.length === 0 ? (
+            /*
+             * 这句**保留**（缩短过）：它回答的是"为什么这里条目这么少" ——
+             * 不说明的话，学生会以为画像坏了。属**真实性口径**，不是解释性小字。
+             */
             <p className="hint">
-              本会话还没有产生掌握状态条目。当前只有「补上这一段」会写入掌握状态与缺口历史
-              —— 练习提交与提问会上报事件，但暂不产生这里的条目（原因见练习面板的说明）。
+              目前只有「补上这一段」会写入掌握状态与缺口历史；提问与练习会上报事件，但不产生这里的条目。
             </p>
           ) : (
             <ul className="profile-list">

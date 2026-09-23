@@ -22,11 +22,8 @@ import { VoiceInputButton } from './VoiceInputButton';
 
 type Props = { wb: WorkbenchState & WorkbenchActions; mock: boolean };
 
-const PLACEHOLDER = `把讲义、题目或任何看不懂的段落粘贴到这里。
-
-例如：
-判断 f(x) 的单调性时，只需看 f'(x) 的符号：
-f'(x) > 0 时函数递增，f'(x) < 0 时函数递减。`;
+/** 输入框占位只留"放什么"，**不解释系统会做什么** —— 那是冗余小字（2026-09-23 精简） */
+const PLACEHOLDER = '把讲义、题目或看不懂的段落粘贴到这里';
 
 /**
  * 尚未接入的识别通道 → 面向学生的说明（**不假装已解析**）。
@@ -91,9 +88,13 @@ export function MaterialPanel({ wb, mock }: Props) {
         </span>
       </header>
 
-      <p className="hint">
-        上传讲义后，系统会抽出知识点、判断哪些前置知识你的材料没讲，缺的那块可以直接补上。
-      </p>
+      {/*
+        ⚠️ 这里原有一句"上传讲义后，系统会抽出知识点、判断哪些前置知识没讲……"——
+        2026-09-23 按"去掉不必要的说明性小字"删掉：它解释的是**系统会做什么**，
+        而按一下按钮就知道，属于纯冗余。
+        （对比：**真实性标注**与此相反 —— 像"服务端不做语音转写""解析结果由演示数据生成"
+        这类**不说明就会被误读**的话，一律保留，见下方 `mock` 提示与 `VoiceInputButton`。）
+      */}
 
       <textarea
         className="input"

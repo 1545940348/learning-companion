@@ -94,12 +94,13 @@ export function SidebarNav({ wb, view, onViewChange }: Props) {
           className={view === 'chat' ? 'side-item side-item-active' : 'side-item'}
           data-view="chat"
           onClick={() => onViewChange('chat')}
+          /* 会话状态改到悬停可见（`title`）：常驻在左栏是**冗余小字**，此处一句已够 */
+          title={sub}
           aria-current={view === 'chat' ? 'page' : undefined}
         >
           <Icon name="chat" size={16} />
           <span className="side-label">{label}</span>
         </button>
-        <div className="side-sub">{sub}</div>
       </div>
 
       {/*
