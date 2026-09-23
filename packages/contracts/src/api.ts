@@ -258,6 +258,13 @@ export interface GapResponse {
   verification: VerificationStatus;
   /** 递增后的材料版本 */
   materialVersion: number;
+  /**
+   * 这一版内容是否**经过修正重试**（`P-B2`，2026-09-23；**加性可选**）。
+   *
+   * 语义：第一次生成未通过符号验证 → 把失败原因回喂模型再生成一次 → 返回的是第二次的结果。
+   * 界面据此如实标注"这一版是修正后的"。**字段缺席**表示没走过重试（不是"保证没错"的意思）。
+   */
+  corrected?: boolean;
 }
 
 /* ============ POST /api/quiz ============ */

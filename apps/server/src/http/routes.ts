@@ -614,12 +614,20 @@ apiRouter.post(
      */
     const conceptName = findConceptName(session, conceptId) ?? conceptId;
 
-    const { content, claims } = await teaching.supplementGap({
-      conceptId,
-      conceptName,
-      reason,
-      materials: toSlices(session),
-    });
+    /*
+     * `P-B2`（2026-09-23）：走**失败修正回环** ——
+     * 第一次生成 → 符号验证；**若 `failed`**，把失败原因回喂模型再生成一次 → 再验证。
+     *
+     * ⚠️ **只修一次，且"重试过 ≠ 通过"**：第二次仍 `failed` 就照常落 `DISPUTED`。
+     * `corrected` 如实回给前端，让界面能说明"这一版是修正后的"——
+     * 修正过这件事不该瞒着学生。
+     */
+    const outcome = await teaching.supplementGapWithCorrection(
+      { conceptId, conceptName, reason, materials: toSlices(session) },
+      (draft) => verifySupplementContent(draft),
+    );
+    /* 只需要正文：结论已经在 `outcome.report` 里（`claims` 由回环内部交给验证函数了） */
+    const { content } = outcome;
 
     /*
      * `B3`：验证状态由**符号引擎**给出（`packages/teaching/src/symbolic.ts`），不再固定 `unverified`。
@@ -629,7 +637,7 @@ apiRouter.post(
      * 另外补上长度核对：`SUPPLEMENT_LENGTH`（200—400 字）超区间的内容照常返回，
      * 但**不据此标"已符号验证"**。
      */
-    const verificationReport = verifySupplementContent({ content, claims });
+    const verificationReport = outcome.report;
     const verification: VerificationStatus = verificationReport.status;
     const status = deriveSupplementStatus(verification);
 
@@ -650,6 +658,8 @@ apiRouter.post(
       status,
       verification,
       materialVersion: updated.materialVersion,
+      /* 走过修正回环就如实说 —— 界面据此标注"这一版是修正后的" */
+      ...(outcome.corrected ? { corrected: true } : {}),
     };
     res.json(response);
   }),

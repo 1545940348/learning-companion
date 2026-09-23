@@ -412,6 +412,13 @@ export interface SupplementGapInput {
   /** 缺口理由，来自前置关系的 reason */
   reason: string;
   materials: MaterialSlice[];
+  /**
+   * 修正重试时带上"上一版未通过验证的原因"（`P-B2`，2026-09-23）。
+   *
+   * ⚠️ 措辞必须是**具体的失败结论**（哪条断言、期望什么、实际什么），
+   * **不能**写成"请通过验证" —— 后者会诱导模型为了过关而改口径，那是真实性红线。
+   */
+  correctionHint?: string;
 }
 
 export interface SupplementGapOutput {
@@ -441,6 +448,10 @@ export async function supplementGap(
   const prompt = [
     `需要补齐的前置概念：${input.conceptName}（${input.conceptId}）`,
     `判定为缺口的理由：${input.reason}`,
+    /* 修正重试时把"上一版错在哪"带上（见 `supplementGapWithCorrection`） */
+    ...(input.correctionHint
+      ? ['', '⚠️ 这是修正重试。上一版未通过符号验证，问题如下：', input.correctionHint]
+      : []),
     '',
     '学生当前材料：',
     renderMaterials(input.materials),
@@ -463,6 +474,87 @@ export async function supplementGap(
   }
 
   return { content: raw.trim(), claims: [] };
+}
+
+/* ============ 失败修正回环（`P-B2`，用例 E14；2026-09-23） ============ */
+
+/**
+ * 验证报告里**我们用到**的那部分。
+ *
+ * 刻意只声明这两个字段（而不是 import `SymbolicReport`）：
+ * 回环只关心"过没过"与"为什么没过"，把整个报告类型耦合进来会让这个函数的
+ * 改动静默牵动 `symbolic.ts` 的实现细节。
+ */
+export interface SupplementVerification {
+  /**
+   * 与契约的 `VerificationStatus` **同集合**（不是自己另立一套）——
+   * 服务端会把它直接写进响应，两边取值一旦分叉就会出现"验证说 A、响应说 B"。
+   */
+  status: VerificationStatus;
+  notes: string[];
+}
+
+export interface SupplementWithCorrectionResult {
+  content: string;
+  claims: unknown[];
+  report: SupplementVerification;
+  /** 是否走过修正重试（调用方据此**如实告诉学生**"这一版是修正后的"） */
+  corrected: boolean;
+  /** 第一次失败的原因（人可读）；未重试时为 `null` */
+  firstFailure: string | null;
+}
+
+/**
+ * 把验证报告翻成**给模型的修正要求**。
+ *
+ * 要点：说清"上一版哪几条结论没过"，而**绝不**写成"请通过验证" ——
+ * 后者会诱导模型为了过关而改口径，那是真实性红线。
+ */
+function describeFailure(report: SupplementVerification): string {
+  const details = report.notes.length > 0 ? report.notes : ['（引擎未给出细节）'];
+  return [
+    '上一版补充内容没有通过符号验证，涉及下面这几条结论：',
+    ...details.map((note) => `- ${note}`),
+    '',
+    '请只修正与这些结论相关的表述，其余内容保持不变；如果某条结论本身无法成立，',
+    '就把它改成能成立的说法或删掉它，不要为了"看起来通过"而更换口径。',
+  ].join('\n');
+}
+
+/**
+ * 带**失败修正回环**的缺口补充（`P-B2`，2026-09-23；用例 E14）。
+ *
+ * ### 回环是什么、不是什么
+ *
+ * 第一次生成 → 验证；**若 `failed`**，把失败原因回喂模型**再生成一次** → 再验证。
+ *
+ * - **只修一次**：无限重试会烧额度，也会把"模型学会猜对断言"误当成质量提升；
+ * - **不隐藏第一次的失败**：结果里带着 `firstFailure`，界面据此说明"这一版是修正后的"；
+ * - **重试过 ≠ 通过**：第二次仍 `failed` 就还是 `failed`（调用方照常落 `DISPUTED`）。
+ *   这条是整条回环的**红线** —— 否则"重试"就成了掩盖失败的遮羞布。
+ *
+ * ### 为什么 `verify` 作为参数传进来
+ *
+ * 校验逻辑在 `symbolic.ts`。用参数注入而不是直接 import，是为了让这条回环
+ * **可以脱离符号引擎单独测**（传一个假的 `verify` 就能测全三种分支），
+ * 同时避免 `tasks.ts ↔ symbolic.ts` 之间产生环。
+ */
+export async function supplementGapWithCorrection(
+  call: ModelCaller,
+  input: SupplementGapInput,
+  verify: (draft: { content: string; claims: unknown[] }) => SupplementVerification,
+): Promise<SupplementWithCorrectionResult> {
+  const first = await supplementGap(call, input);
+  const firstReport = verify(first);
+  if (firstReport.status !== 'failed') {
+    return { ...first, report: firstReport, corrected: false, firstFailure: null };
+  }
+
+  const firstFailure = describeFailure(firstReport);
+  const second = await supplementGap(call, { ...input, correctionHint: firstFailure });
+  const secondReport = verify(second);
+
+  return { ...second, report: secondReport, corrected: true, firstFailure };
 }
 
 /* ============ 按材料出题 ============ */
