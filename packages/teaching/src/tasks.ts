@@ -27,6 +27,7 @@ import {
   SYSTEM_GAP,
   SYSTEM_KNOWLEDGE,
   SYSTEM_QUIZ_FROM_MATERIAL,
+  SYSTEM_QUIZ_VARIANT,
   SYSTEM_TUTOR,
 } from './prompt.js';
 
@@ -587,6 +588,79 @@ export async function generateQuizFromMaterial(
     normalized.push({
       ...(item as unknown as QuizItem),
       // 生成题缺省「未验证」：模型自出的题不等于经验证的题（§4.2）
+      verification: toVerification(item.verification),
+    });
+  }
+  return normalized;
+}
+
+/* ============ 按薄弱概念出变式题（`P-B17`，2026-09-23） ============ */
+
+export interface VariantConcept {
+  conceptId: string;
+  conceptName: string;
+  /**
+   * 画像里的当前状态。
+   *
+   * ⚠️ 只用于**调用方排序与说明**，**不写进提示词** ——
+   * 把"这个学生是 MISSING"告诉模型，只会诱使它出更简单的题甚至写进题干。
+   */
+  status: PrerequisiteStatus;
+}
+
+export interface GenerateVariantInput {
+  /** 要练的薄弱概念（顺序即出题优先级） */
+  weakConcepts: VariantConcept[];
+  count: number;
+  materials: MaterialSlice[];
+}
+
+/**
+ * 按**学生画像里的薄弱概念**生成变式题（`P-B17`，2026-09-23）。
+ *
+ * ### "变式"指什么
+ *
+ * 不是"再出一道同类题"，而是**换情境、换问法**：讲义里是"求 `f(x)=x³−3x` 的单调区间"，
+ * 变式就该换函数、换问法（判断某点在哪个区间，或反过来由单调性求参数范围）。
+ * 这一条写在提示词里 —— 否则模型只会把原题的数字换一换。
+ *
+ * ### 为什么送概念**名**而不是 id
+ *
+ * 与 `I15` 同一个教训：模型不认识 `kp-monotonicity` 这种编号，看到它只会照抄。
+ * id 留在结果里用来**对应回**概念。
+ *
+ * ### 题目里不许出现画像信息
+ *
+ * 提示词明确要求"题目读起来应当是一道普通的练习题"——
+ * 学生做自己的练习时，不该从题干里看出"因为你是差生"。
+ */
+export async function generateVariantQuiz(
+  call: ModelCaller,
+  input: GenerateVariantInput,
+): Promise<QuizItem[]> {
+  const prompt = [
+    `请针对下面这些**需要加强的概念**生成 ${input.count} 道单选题（每题对应其中一个）：`,
+    ...input.weakConcepts.map((concept) => `- ${concept.conceptName}（${concept.conceptId}）`),
+    '',
+    '学生当前材料（用于对齐讲法与记号）：',
+    renderMaterials(input.materials),
+  ].join('\n');
+
+  const raw = await call(prompt, { system: SYSTEM_QUIZ_VARIANT, json: true });
+  const parsed = extractJson(raw) as { items?: unknown };
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+
+  const normalized: QuizItem[] = [];
+  for (const item of items) {
+    if (!isPlainObject(item)) continue;
+    normalized.push({
+      ...(item as unknown as QuizItem),
+      /*
+       * ⚠️ **来源由服务端定，不由模型自报** ——
+       * 让模型填 `source` 就等于把"这题是哪来的"交给它发挥，真实性上说不过去。
+       */
+      source: 'variant',
+      /** 模型即时生成的题缺省「未验证」，不得默认视为正确（§4.2） */
       verification: toVerification(item.verification),
     });
   }

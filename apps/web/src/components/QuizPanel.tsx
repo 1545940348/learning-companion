@@ -123,8 +123,23 @@ export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
           >
             按我的材料出题
           </button>
+          <button
+            className={source === 'variant' ? 'mode mode-active' : 'mode'}
+            onClick={() => setSource('variant')}
+          >
+            针对需加强的概念
+          </button>
         </div>
-        <button className="btn" onClick={load} disabled={busy || materialBlocked}>
+        {/*
+          ⚠️ 只有 `material` 受"零材料"限制：变式题（`P-B17`）依据的是**掌握情况**，
+          会话里一份讲义都没有时也该能练。至于"有没有可练的概念"，
+          由**服务端**判定（挑不出就返回空集），界面照实说明 —— 前端不猜。
+        */}
+        <button
+          className="btn"
+          onClick={load}
+          disabled={busy || (source === 'material' && materialBlocked)}
+        >
           {busy ? '正在出题…' : items ? '换一组' : '开始练习'}
         </button>
       </div>
@@ -143,10 +158,24 @@ export function QuizPanel({ wb, initialSource = 'fixed' }: Props) {
         </p>
       )}
 
+      {source === 'variant' && (
+        /*
+         * ⚠️ 这里写「需要加强的概念」而不是「你的薄弱点」：与出题提示词第 4 条同一条纪律 ——
+         * 别在学生做题时反复提醒他"你是差生"。
+         */
+        <p className="hint-inline">
+          题目按你的「需要加强的概念」来出，不依赖材料；题目里不会出现任何个人信息。
+        </p>
+      )}
+
       {!items ? (
         <p className="hint">选好主题与来源后开始练习。答案在你提交之前不会显示。</p>
       ) : items.length === 0 ? (
-        <p className="hint">这个主题暂时没有可用题目。</p>
+        <p className="hint">
+          {source === 'variant'
+            ? '暂时没有可练的「需要加强的概念」—— 现有记录里这些概念都已掌握，或还没有足够的学习记录。先做几道题、或补充一份讲义，这里就会有内容。'
+            : '这个主题暂时没有可用题目。'}
+        </p>
       ) : (
         <>
           {items.map((item, index) => (

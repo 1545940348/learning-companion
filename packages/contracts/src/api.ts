@@ -278,8 +278,15 @@ export interface GapResponse {
 export interface QuizRequest {
   topic: Topic;
   source: QuizSource;
-  /** source 为 'material' 时必填 */
+  /** source 为 'material' / 'variant' 时必填 */
   sessionId?: string;
+  /**
+   * `source: 'variant'` 时可指定要练的概念（`P-B17`，2026-09-23；**加性可选**）。
+   *
+   * **省略**时由服务端从画像里挑薄弱概念 —— 两种都合法：界面第一版走"按画像自动挑"，
+   * 但要留出"我只想练这一条"的口子。
+   */
+  conceptIds?: string[];
 }
 
 export interface QuizResponse {

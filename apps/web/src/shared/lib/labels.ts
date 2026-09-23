@@ -74,6 +74,11 @@ export const TUTOR_MODE_LABELS: Record<TutorMode, string> = {
 export const QUIZ_SOURCE_LABELS: Record<QuizSource, string> = {
   fixed: '项目自编练习',
   material: '基于你的材料生成',
+  /*
+   * 变式题（`P-B17`）。标签只说**依据是掌握情况**，不说"你的薄弱点"——
+   * 学生做题时不该被提醒"你是差生"（与出题提示词的第 4 条同一条纪律）。
+   */
+  variant: '针对需加强的概念',
 };
 
 export const MISCONCEPTION_LABELS: Record<MisconceptionKind, string> = {

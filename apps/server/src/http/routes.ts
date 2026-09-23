@@ -30,6 +30,7 @@ import {
   type MaterialSlice,
   type ModelCaller,
   type TeachingModule,
+  type VariantConcept,
 } from '@lc/teaching';
 import type {
   ApiErrorBody,
@@ -38,6 +39,7 @@ import type {
   GraphResponse,
   HealthResponse,
   KnowledgeResponse,
+  LearnerProfile,
   Material,
   ParseResponse,
   PrerequisiteStatus,
@@ -101,6 +103,7 @@ import {
   createSession,
   aggregateClass,
   getGraphNeighborhood,
+  getProfile,
   listSessionSummaries,
   previewMaterials,
   requireSession,
@@ -668,6 +671,49 @@ apiRouter.post(
 /* ==================== POST /api/quiz ==================== */
 
 /**
+ * 从画像里挑出**薄弱概念**（`P-B17`，2026-09-23）。
+ *
+ * ### 什么算"薄弱"
+ *
+ * 判据取自六态的**语义**，不看任何数字：
+ * - **算弱**：`MISSING`（材料没覆盖）／`PENDING`（待确认）／`DISPUTED`（有争议）／
+ *   `SUPPLEMENTED`（**AI 补过但没过验证** —— §4.2 要求"未验证不得默认视为正确"）；
+ * - **不算弱**：`LOCAL`（材料已覆盖）／`VERIFIED`（验证通过）。
+ *
+ * ### 指定了 `conceptIds` 怎么办
+ *
+ * **只从里面挑仍然算弱的那些**：指定一个已经掌握的概念去"练"，练的是无效功，
+ * 而且会让学生以为系统认为他不会。挑不出就返回空数组，由界面**如实说明**
+ * （"这些概念你都已掌握"），而不是硬出一道充数。
+ *
+ * ### 为什么概念名要反查
+ *
+ * 与 `I15` 同一个教训：模型不认识 `kp-monotonicity` 这种编号。
+ * 反查不到就退回 `conceptId`（同 `findConceptName` 的既有口径）。
+ */
+function pickWeakConcepts(
+  session: Session,
+  profile: LearnerProfile | null,
+  requested: string[],
+): VariantConcept[] {
+  const mastery = profile?.mastery ?? {};
+  const weakStatuses: PrerequisiteStatus[] = ['MISSING', 'PENDING', 'DISPUTED', 'SUPPLEMENTED'];
+
+  const candidateIds = requested.length > 0 ? requested : Object.keys(mastery);
+  const picked: VariantConcept[] = [];
+  for (const conceptId of candidateIds) {
+    const status = mastery[conceptId];
+    if (status === undefined || !weakStatuses.includes(status)) continue;
+    picked.push({
+      conceptId,
+      conceptName: findConceptName(session, conceptId) ?? conceptId,
+      status,
+    });
+  }
+  return picked;
+}
+
+/**
  * ⚠️ V2.0 起由 `GET /api/quiz?topic=&source=` 改为 `POST`（§5.3）。
  * 入参不再是 query 而是 body，A 侧调用须同批改造。
  */
@@ -690,9 +736,58 @@ apiRouter.post(
       return;
     }
 
-    // 按材料出题需要会话上下文（说明书 2.6）
+    // 需要会话上下文（说明书 2.6）：`material` 用它读材料，`variant` 用它读画像与概念名
     const sessionId = unwrap(guardNonEmptyText(body.sessionId, 'sessionId'));
     const session = requireSession(sessionId);
+
+    /* ---------- 按画像弱点出变式题（`P-B17`，2026-09-23） ---------- */
+
+    /*
+     * ⚠️ 与"按材料出题"**关键不同**：变式题依赖**画像**，不依赖材料 ——
+     * 所以它**不走**下面那段"没有材料就拒绝"的检查。
+     * 学生完全可以先做几道题暴露弱点、再来练变式，那时会话里可能一份讲义都没有。
+     */
+    if (source === 'variant') {
+      /* `getProfile` 读不到时返回 `undefined`，统一成 `null` 交给挑弱点的逻辑 */
+      const profile = getProfile(session.id) ?? null;
+      const requested = [
+        ...new Set(
+          (Array.isArray(body.conceptIds) ? body.conceptIds : []).filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
+        ),
+      ];
+      const weak = pickWeakConcepts(session, profile, requested);
+
+      if (weak.length === 0) {
+        /*
+         * 挑不出薄弱概念就**直接返回空集，不调模型** ——
+         * 空提示词会让模型凭空出题，那些题与"变式"毫无关系（还白花一次额度）。
+         * 界面据此**如实说明**「暂无可练的薄弱概念」。
+         */
+        res.json({ items: [] });
+        return;
+      }
+
+      const variantItems = await teaching.generateVariantQuiz({
+        weakConcepts: weak,
+        count: MATERIAL_QUIZ_PER_TOPIC,
+        materials: toSlices(session),
+      });
+
+      const variantResponse: QuizResponse = {
+        items: variantItems.map((item, index) => ({
+          ...item,
+          id: item.id ?? `variant-${index}`,
+          topic,
+          // 来源由服务端定：模型自报来源不可信（见 generateVariantQuiz 的注释）
+          source: 'variant',
+          verification: item.verification ?? DEFAULT_VERIFICATION,
+        })),
+      };
+      res.json(variantResponse);
+      return;
+    }
 
     /*
      * `I20⑥`：会话里**没有材料**时必须拒绝，不能返回标着 `source: 'material'` 的题。
