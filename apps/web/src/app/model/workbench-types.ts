@@ -26,6 +26,8 @@ import type {
   Material,
   PrerequisiteRelation,
   PrerequisiteStatus,
+  QuizAttemptAnswer,
+  QuizAttemptResult,
   QuizItem,
   QuizSource,
   Topic,
@@ -153,12 +155,35 @@ export interface Notice {
  * **根本没有请求发出**，那句话就是编的。
  */
 export type QuizReportOutcome =
-  /** 服务端已接受这条画像事件 */
+  /** 服务端已接受这次提交（判分与归因都在服务端完成） */
   | 'sent'
   /** 本次练习没有学习会话（自编题路径）→ **没有发出任何请求** */
   | 'no-session'
   /** 发过请求但失败（不阻断练习，§4.5） */
   | 'failed';
+
+/**
+ * 一次练习提交的结果（`P-B9`，2026-09-23）。
+ *
+ * ### 为什么不是简单一个状态字符串
+ *
+ * 归因文本要**逐题**显示（"这题错在哪"），所以提交的返回值必须按题带回结论；
+ * 而"有没有真的提交成功"是**另一个维度**（`outcome`）。两者混在一起会出现
+ * 上一版那种含糊：失败时 `results` 是空的，界面若只看它，会把"没提交上"
+ * 说成"这次没有错题"。
+ *
+ * 因此这里**两个维度都给**：`outcome` 说传输，`results` 说内容。
+ */
+export interface QuizReport {
+  outcome: QuizReportOutcome;
+  /**
+   * 逐题结果。`outcome !== 'sent'` 时一律为空数组 ——
+   * **空数组在这里只表示"没拿到"，不表示"全对"**，界面必须按 `outcome` 分叉。
+   */
+  results: QuizAttemptResult[];
+  /** 答错但**没能归因**的题数，由服务端数好（前端分不清"答对"与"推不出"） */
+  unattributed: number;
+}
 
 export interface WorkbenchState {
   sessionId: string | null;
@@ -247,16 +272,18 @@ export interface WorkbenchActions {
    * 来源**不会建会话**，`sessionRef.current` 为空 → 函数在开头就 `return`，
    * **根本没有请求发出**。这是无据声明（与 `I20⑦` 同一类）。
    * 因此改为把"到底发生了什么"如实交给调用方，由它决定怎么写：
-   * - `'sent'` 服务端已接受这次事件；
+   * - `'sent'` 服务端已接受这次提交；
    * - `'no-session'` 本次练习没有学习会话（默认自编题路径）→ **没有发出任何请求**；
    * - `'failed'` 发出过请求但失败了（不阻断练习，§4.5）。
+   *
+   * ### 入参只有作答本身（`P-B9`，2026-09-23）
+   *
+   * 不再送 `topic` / `source` / `total` / `correct` 这些**前端算出来的汇总**：
+   * 服务端按 `itemId` 反查题库就能自己判分与统计，前端报的汇总反而是可被
+   * 说错的一份数据（`I20②` 那一整类问题由此消失）。前端只送它无法伪造的东西 ——
+   * **学生到底选了哪个选项**。
    */
-  reportQuizAttempt: (payload: {
-    topic: Topic;
-    source: QuizSource;
-    total: number;
-    correct: number;
-  }) => Promise<QuizReportOutcome>;
+  reportQuizAttempt: (payload: { answers: QuizAttemptAnswer[] }) => Promise<QuizReport>;
   refreshGraph: (knowledgePointId?: string) => Promise<void>;
   fetchProfile: () => Promise<void>;
   /**

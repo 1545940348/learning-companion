@@ -17,7 +17,17 @@
  *   npm run verify:graph
  */
 
-import { analyzeKnowledge, answerQuestion } from '@lc/teaching';
+import {
+  ATTRIBUTABLE_KINDS,
+  FIXED_QUIZ,
+  FIXED_QUIZ_MISCONCEPTIONS,
+  analyzeKnowledge,
+  answerQuestion,
+  attributeQuizAttempt,
+  misconceptionKey,
+  orchestrateQuiz,
+  orchestrateTutor,
+} from '@lc/teaching';
 import {
   DEFAULT_VERIFICATION,
   MATERIAL_LIMITS,
@@ -551,6 +561,383 @@ console.log('\n=== 14. 概念别名归一：同义合并 / 边重指 / 自环清
   };
   const mergedBilingual = await analyzeKnowledge(fakeCall(bilingual), { materials: [] });
   check('★ 英文名与中文名同义时也合并', mergedBilingual.graph.nodes.length === 1);
+}
+
+/* ==================== 15. 错题归因（P-B9，2026-09-23） ==================== */
+
+console.log('\n=== 15. 错题归因：四类各有可复现样例，理由逐条可核 ===\n');
+
+{
+  const allItems = Object.values(FIXED_QUIZ).flat();
+  const distractors = allItems.flatMap((item) =>
+    item.options
+      .filter((option) => option.id !== item.answer)
+      .map((option) => ({ item, option })),
+  );
+
+  /* ① 标注表本身：齐不齐、键对不对得上、有没有标错地方 */
+  check('自编题共 9 道（3 主题 × 3 道）', allItems.length === 9, String(allItems.length));
+  check(
+    '★ 27 个干扰项**全部**带错因标注，无一遗漏',
+    distractors.length === 27 && distractors.every(({ option }) => option.misconception),
+    `缺失 ${distractors.filter(({ option }) => !option.misconception).length} 条 / 共 ${distractors.length}`,
+  );
+
+  /* 键写错（如把 fx-der-1 拼成 fx-der-01）会让标注**静默失效** —— 标注在表里、
+     题目上却没有，归因于是退化。这里把它变成红灯。 */
+  const hitKeys = allItems
+    .flatMap((item) => item.options.map((option) => misconceptionKey(item.id, option.id)))
+    .filter((key) => key in FIXED_QUIZ_MISCONCEPTIONS);
+  check(
+    '★★ 标注表的 27 个键全部命中真实选项（拼错键会静默失效）',
+    hitKeys.length === 27,
+    `命中 ${hitKeys.length}，表内共 ${Object.keys(FIXED_QUIZ_MISCONCEPTIONS).length} 条`,
+  );
+  check(
+    '★ 正确选项上**没有**错因标注（标注只能描述"错在哪"）',
+    allItems.every((item) => !item.options.find((o) => o.id === item.answer)?.misconception),
+  );
+
+  const kindsUsed = new Set(distractors.map(({ option }) => option.misconception?.kind));
+  check(
+    '★ 四类归因在自编题里都有可复现样例',
+    ATTRIBUTABLE_KINDS.every((kind) => kindsUsed.has(kind)),
+    `实际出现：${[...kindsUsed].join(' / ')}`,
+  );
+  check(
+    '错因理由都是可核对的实句（均 > 20 字，不是"理解不到位"式空话）',
+    distractors.every(({ option }) => (option.misconception?.reason.length ?? 0) > 20),
+  );
+
+  /* ② 四类各挑一条走完整条链路 */
+  const SAMPLES = [
+    ['fx-der-1', 'A', 'concept-misunderstanding', '把函数值当导数值'],
+    ['fx-der-1', 'D', 'calculation-error', '把 2x 取成了倒数'],
+    ['fx-der-3', 'A', 'condition-omission', '漏掉"在 x = 2 处"'],
+    ['fx-der-2', 'A', 'recognition-error', '把 Δx→0 当成了结果为 0'],
+  ];
+  for (const [itemId, optionId, expectedKind, what] of SAMPLES) {
+    const item = allItems.find((it) => it.id === itemId);
+    const attribution = attributeQuizAttempt({ item, selectedOptionId: optionId });
+    check(
+      `★ 样例：${itemId} 选 ${optionId} ⇒ ${expectedKind}（${what}）`,
+      attribution?.kind === expectedKind,
+      attribution ? attribution.kind : '返回了 null',
+    );
+    check(
+      `   ${itemId}:${optionId} 的依据是预标注、可信度为人工核验（basis/verification 如实回报）`,
+      attribution?.basis === 'option-tag' && attribution?.verification === 'human',
+      `${attribution?.basis} / ${attribution?.verification}`,
+    );
+    /* 核对材料必须两侧齐全且不同 —— 这是"可核对"的物理下限 */
+    check(
+      `   ${itemId}:${optionId} 带齐两侧原文证据（学生可比对）`,
+      Boolean(
+        attribution?.evidence?.selectedText &&
+          attribution?.evidence?.correctText &&
+          attribution.evidence.selectedText !== attribution.evidence.correctText,
+      ),
+    );
+  }
+
+  /* ③ 答对／选项不存在 ⇒ 不给归因（不无中生有） */
+  const der1 = allItems.find((it) => it.id === 'fx-der-1');
+  check(
+    '答对时不归因（归因只描述"错在哪"）',
+    attributeQuizAttempt({ item: der1, selectedOptionId: 'B' }) === null,
+  );
+  check(
+    '选了不存在的选项 ⇒ 返回 null（给不出证据就不给结论）',
+    attributeQuizAttempt({ item: der1, selectedOptionId: 'Z' }) === null,
+  );
+
+  /* ④ 强断言：27 个干扰项**逐条**都能归因，一条都不许落到"无法归因" */
+  const unresolved = distractors.filter(
+    ({ item, option }) => attributeQuizAttempt({ item, selectedOptionId: option.id }) === null,
+  );
+  check(
+    '★★ 自编题的 27 个干扰项全部能给出归因（自己出的题没有理由推不出来）',
+    unresolved.length === 0,
+    unresolved.map(({ item, option }) => `${item.id}:${option.id}`).join(', '),
+  );
+}
+
+/* ---------- 层 ②：结构推导（无预标注时按集合关系归因） ---------- */
+
+console.log('\n--- 15.2 结构推导层：只用可复算的集合关系，推不出就不断言 ---\n');
+
+{
+  /* 合成一道**没有预标注**的区间题 —— 层 ① 拿不到，才能测到层 ② */
+  const intervalItem = {
+    id: 'syn-mon-1',
+    topic: 'monotonicity',
+    source: 'material',
+    stem: '（合成题）函数 f 的单调递增区间是：',
+    options: [
+      { id: 'A', text: '(−∞, −1) 与 (1, +∞)' },
+      { id: 'B', text: '(1, +∞)' },
+      { id: 'C', text: '(−∞, +∞)' },
+      { id: 'D', text: '(−1, 1)' },
+    ],
+    answer: 'A',
+  };
+
+  const subset = attributeQuizAttempt({ item: intervalItem, selectedOptionId: 'B' });
+  check(
+    '★ 所选区间是正确答案的**真子集** ⇒ 条件遗漏（一次包含判定，可复算）',
+    subset?.kind === 'condition-omission',
+    String(subset?.kind),
+  );
+  check(
+    '   该归因的依据是结构推导、可信度是符号推导（**不冒充**人工标注）',
+    subset?.basis === 'structural' && subset?.verification === 'symbolic',
+    `${subset?.basis} / ${subset?.verification}`,
+  );
+  check(
+    '   理由说的是"答案本身的集合关系"，可当场核对',
+    Boolean(subset?.reason.includes('真子集')),
+    subset?.reason,
+  );
+
+  const superset = attributeQuizAttempt({ item: intervalItem, selectedOptionId: 'C' });
+  check(
+    '★ 所选区间**多包含**了一部分 ⇒ 条件遗漏，且理由与"子集"那条**不同**',
+    superset?.kind === 'condition-omission' &&
+      superset.reason !== subset?.reason &&
+      superset.reason.includes('多包含'),
+    superset?.reason,
+  );
+
+  /* 关键红线：两个区间**不相交**时分不开"概念混了"与"看错了题" ⇒ 不许猜 */
+  check(
+    '★★ 所选区间与正确答案不相交 ⇒ 返回 null（分不开就不断言，§2.6）',
+    attributeQuizAttempt({ item: intervalItem, selectedOptionId: 'D' }) === null,
+  );
+
+  /* 关键红线：**数值**型选项不做倍数／反号推断 —— 这是被否决的一层（见 attribution.ts） */
+  const numericItem = {
+    id: 'syn-num-1',
+    topic: 'derivative',
+    source: 'material',
+    stem: '（合成题）f′(2) = ：',
+    options: [
+      { id: 'A', text: '12' },
+      { id: 'B', text: '6' },
+      { id: 'C', text: '24' },
+    ],
+    answer: 'A',
+  };
+  check(
+    '★★ 无标注的数值题选错 ⇒ 如实返回"无法归因"，不按倍数/反号关系猜（被否决的数值层）',
+    attributeQuizAttempt({ item: numericItem, selectedOptionId: 'B' }) === null,
+  );
+}
+
+/* ---------- 关键反例：这条把"被否决的数值层"钉死 ---------- */
+
+console.log('\n--- 15.3 反例：数值倍数关系**不足以**断定计算错误 ---\n');
+
+{
+  /* `fx-der-3` 的正确答案是 12、干扰项 A 是 6。
+     一个天真的实现会说"6 正好是 12 的一半 ⇒ 计算错误（除以 2）"，
+     但选 6 的真实原因是**忘了把 x = 2 代进去**（6 是导函数 f′(x) = 6x 的系数）。
+     这个反例就是**删掉数值层**的依据，保留在此防止后来者把它加回来。 */
+  const der3 = Object.values(FIXED_QUIZ)
+    .flat()
+    .find((item) => item.id === 'fx-der-3');
+  const attribution = attributeQuizAttempt({ item: der3, selectedOptionId: 'A' });
+  check(
+    '★★ 反例：fx-der-3 选 6 ⇒ 归为「条件遗漏」，**不是**"除以 2 算错"',
+    attribution?.kind === 'condition-omission',
+    String(attribution?.kind),
+  );
+  check(
+    '★★ 该理由点明了漏掉的条件（x = 2），而不是拿 6 与 12 的倍数关系说事',
+    Boolean(attribution?.reason.includes('x = 2') && !attribution.reason.includes('一半')),
+    attribution?.reason,
+  );
+}
+
+/* ==================== 16. 多智能体协作与降级（P-B8，2026-09-23） ==================== */
+
+console.log('\n=== 16. 多智能体降级：任一 Agent 失败不影响主流程并如实标注（E18） ===\n');
+
+{
+  const blocks = [
+    { id: 'b1', kind: 'explanation', text: '导数是变化率。', verification: 'symbolic' },
+  ];
+  const events = [
+    { type: 'question-asked', sessionId: 's', at: new Date().toISOString(), payload: {} },
+  ];
+
+  /* ---------- ① 一切正常：没有降级记录，验证状态原样 ---------- */
+  const happy = await orchestrateTutor({
+    tutor: async () => blocks,
+    verifier: () => 'symbolic',
+    diagnoser: () => events,
+  });
+  check('全部成功时**没有**降级记录（不无端报警）', happy.degraded.length === 0, happy.degraded);
+  check('全部成功时验证状态原样透出', happy.verification === 'symbolic');
+  check('全部成功时画像事件原样透出', happy.profileEvents.length === 1);
+
+  /* ---------- ② 验证 Agent 失败：主流程继续，且**降级方向只能是更保守** ---------- */
+  let verifierErrorSeen = null;
+  const verifierDown = await orchestrateTutor(
+    {
+      tutor: async () => blocks,
+      verifier: () => {
+        throw new Error('symbolic engine unavailable: ENOENT /internal/path');
+      },
+      diagnoser: () => events,
+    },
+    { onAgentError: (agent, error) => (verifierErrorSeen = { agent, message: error.message }) },
+  );
+  check(
+    '★★ 验证 Agent 失败时**主流程继续**（回答块照常返回）',
+    verifierDown.blocks.length === 1,
+    verifierDown.blocks.length,
+  );
+  check(
+    '★★ 验证 Agent 失败 ⇒ 标 unverified（**绝不**放行成 symbolic/verified）',
+    verifierDown.verification === 'unverified',
+    verifierDown.verification,
+  );
+  check(
+    '★★ 失败被**如实标注**：degraded 里有一条 verifier',
+    verifierDown.degraded.length === 1 && verifierDown.degraded[0].agent === 'verifier',
+    verifierDown.degraded,
+  );
+  check(
+    '   降级记录说清了"为什么"与"改用了什么"（两项都不为空）',
+    Boolean(verifierDown.degraded[0].reason) && Boolean(verifierDown.degraded[0].fallback),
+  );
+  check(
+    '★★ 面向学生的文案**不含上游报错原文**（内部路径不外泄）',
+    !JSON.stringify(verifierDown.degraded).includes('ENOENT') &&
+      !JSON.stringify(verifierDown.degraded).includes('/internal/'),
+    JSON.stringify(verifierDown.degraded),
+  );
+  check(
+    '   原始错误只经 onAgentError 交出（给日志，不给界面）',
+    verifierErrorSeen?.agent === 'verifier' && verifierErrorSeen.message.includes('ENOENT'),
+    verifierErrorSeen,
+  );
+  check(
+    '★ 一个 Agent 失败**不影响别的 Agent**：诊断照常产出',
+    verifierDown.profileEvents.length === 1,
+  );
+
+  /* ---------- ③ 诊断 Agent 失败：不阻断答疑 ---------- */
+  const diagnoserDown = await orchestrateTutor({
+    tutor: async () => blocks,
+    verifier: () => 'symbolic',
+    diagnoser: () => {
+      throw new Error('store write failed');
+    },
+  });
+  check('★ 诊断 Agent 失败时答疑照常（回答块在）', diagnoserDown.blocks.length === 1);
+  check(
+    '★ 诊断 Agent 失败 ⇒ 验证状态**不受连累**（仍是 symbolic）',
+    diagnoserDown.verification === 'symbolic',
+    diagnoserDown.verification,
+  );
+  check(
+    '★ 诊断 Agent 失败 ⇒ 画像事件为空（跳过更新，而不是记半条）',
+    diagnoserDown.profileEvents.length === 0,
+  );
+  check(
+    '★ 诊断 Agent 失败同样被如实标注',
+    diagnoserDown.degraded.length === 1 && diagnoserDown.degraded[0].agent === 'diagnoser',
+  );
+
+  /* ---------- ④ 两个辅助 Agent 一起挂：两条记录，互不覆盖 ---------- */
+  const bothDown = await orchestrateTutor({
+    tutor: async () => blocks,
+    verifier: () => {
+      throw new Error('v');
+    },
+    diagnoser: () => {
+      throw new Error('d');
+    },
+  });
+  check(
+    '★★ 两个辅助 Agent 同时失败 ⇒ **两条**降级记录（不互相覆盖、不合并成一条）',
+    bothDown.degraded.length === 2 &&
+      bothDown.degraded.map((item) => item.agent).sort().join(',') === 'diagnoser,verifier',
+    bothDown.degraded.map((item) => item.agent),
+  );
+
+  /* ---------- ⑤ 主 Agent（答疑）失败：**照常抛出**，不吞 ---------- */
+  let mainThrew = false;
+  try {
+    await orchestrateTutor({
+      tutor: async () => {
+        throw new Error('main agent down');
+      },
+      verifier: () => 'symbolic',
+    });
+  } catch {
+    mainThrew = true;
+  }
+  check(
+    '★★ 答疑 Agent 失败时**抛出**（它就是主流程，没有可降级的替身；吞掉等于给"成功但空"的响应）',
+    mainThrew,
+  );
+
+  /* ---------- ⑥ 没注入验证 Agent ⇒ 缺省 unverified，但**不算降级** ---------- */
+  const noVerifier = await orchestrateTutor({ tutor: async () => blocks });
+  check(
+    '★ 未接入验证 Agent 时缺省 unverified（§4.2 失败安全方向）',
+    noVerifier.verification === 'unverified',
+    noVerifier.verification,
+  );
+  check(
+    '★★ "没有这个 Agent"与"这个 Agent 失败了"**分开**：不产生降级记录',
+    noVerifier.degraded.length === 0,
+    noVerifier.degraded,
+  );
+}
+
+/* ---------- 16.2 出题 Agent 失败 ⇒ 回落到固定题 ---------- */
+
+console.log('\n--- 16.2 出题 Agent 失败 ⇒ 回落到固定题（并改口来源） ---\n');
+
+{
+  const generated = [
+    { id: 'g1', topic: 'derivative', source: 'material', stem: '按材料生成的题', options: [], answer: 'A' },
+  ];
+  const fixed = [
+    { id: 'fx-der-1', topic: 'derivative', source: 'fixed', stem: '自编题', options: [], answer: 'B' },
+  ];
+
+  const ok = await orchestrateQuiz(async () => generated, () => fixed);
+  check('出题成功时用生成题，且无降级记录', ok.items[0].id === 'g1' && ok.degraded.length === 0);
+
+  const fell = await orchestrateQuiz(
+    async () => {
+      throw new Error('quizzer down');
+    },
+    () => fixed,
+  );
+  check('★ 出题 Agent 失败 ⇒ 回落到固定题（§4.5）', fell.items[0].id === 'fx-der-1', fell.items);
+  check(
+    '★★ 回落被如实标注（degraded 里一条 quizzer）',
+    fell.degraded.length === 1 && fell.degraded[0].agent === 'quizzer',
+    fell.degraded,
+  );
+  check(
+    '★ 回落的说明指出"题不是按你的材料生成的"（否则就是冒名，§9）',
+    fell.degraded[0].fallback.includes('不是根据你的材料生成'),
+    fell.degraded[0].fallback,
+  );
+
+  /* 出题"成功"但返回空 —— 对学生同样无用，也该回落 */
+  const empty = await orchestrateQuiz(async () => [], () => fixed);
+  check(
+    '★ 出题成功但返回**空集** ⇒ 也回落到固定题（空题等于没有题）',
+    empty.items[0].id === 'fx-der-1',
+    empty.items,
+  );
 }
 
 console.log(`\n结果：${passed} 项通过，${failed} 项失败`);

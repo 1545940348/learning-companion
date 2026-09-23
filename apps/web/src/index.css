@@ -897,6 +897,28 @@ body {
   color: var(--err);
 }
 
+/*
+ * 错题归因（`P-B9`）。
+ *
+ * 用**中性**的边框而不是红色：这一块是"给你核对用的材料"，不是又一次宣判。
+ * 真正需要学生注意的是里面的两句原文（你选的 vs 正确的），因此用等宽感的
+ * 引号包起来、与前后的说明文字拉开层次。
+ */
+.quiz-attribution {
+  margin-top: 8px;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+.quiz-attribution-head {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.quiz-attribution-reason {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 /* ==================== 画像 ==================== */
 
 .profile-list {

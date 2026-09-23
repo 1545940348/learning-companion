@@ -13,6 +13,7 @@ import type {
 } from './knowledge.js';
 import type { LowConfidenceSpan, Material, SessionSummary } from './session.js';
 import type { QuizItem, QuizSource, Topic } from './quiz.js';
+import type { AgentDegradation } from './agents.js';
 import type { ProfileRequest, ProfileResponse, TeacherResponse } from './profile.js';
 
 /* ============ 统一错误 ============ */
@@ -291,6 +292,17 @@ export interface QuizRequest {
 
 export interface QuizResponse {
   items: QuizItem[];
+  /**
+   * 本次出题过程中的**降级记录**（`P-B8`，2026-09-23；加性可选）。
+   *
+   * 目前唯一来源是「出题 Agent 失败 → 回落到固定题」。**存在即表示
+   * 这批题不是按原请求的来源生成的** —— 界面必须据此改口，
+   * 不能再显示「基于你的材料生成」。
+   *
+   * 一切正常时不出现该字段（与 `TutorResponse.droppedBlocks` 同一约定：
+   * 缺省即"没有异常"，不必到处写空数组）。
+   */
+  degraded?: AgentDegradation[];
 }
 
 /* ============ POST /api/profile ============ */

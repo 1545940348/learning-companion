@@ -1,9 +1,21 @@
 /**
  * 接口实现 —— 对应说明书 V2.0 §5.3「共享契约」
  *
- * 端点清单（10 个）：POST /api/session、GET /api/health、POST /api/parse、
- * POST /api/knowledge、POST /api/tutor、POST /api/gap、POST /api/quiz、
- * POST /api/profile、GET /api/graph、GET /api/teacher（阶段三，未实现）。
+ * ### 端点清单（2026-09-23 按 `apiRouter` 的实际注册逐条核对过）
+ *
+ * **说明书 §5.3 的十个教学流程接口**：POST /api/session、GET /api/health、
+ * POST /api/parse、POST /api/knowledge、POST /api/tutor、POST /api/gap、
+ * POST /api/quiz、POST /api/profile、GET /api/graph、GET /api/teacher。
+ *
+ * **在此之外另有**：
+ * - GET /api/sessions —— 会话摘要列表（2026-09-23 加，`P2-2` 需要）；
+ * - POST /api/quiz/attempt —— 提交练习并归因（`P-B9`，2026-09-23 加）；
+ * - POST /api/auth/login、POST /api/auth/logout、GET /api/auth/me —— 账号（演示级 `D7`）。
+ *
+ * ⚠️ 这一段的旧版本写着"端点清单（10 个）"并把 `/api/teacher` 标成"未实现"，
+ * 同时漏掉了 `/api/sessions`。**两份账都不是当时的实情**：`/api/teacher` 已在
+ * 2026-09-23 由 501 改为实现。此处按实际注册逐条订正 —— 端点表是接口账本，
+ * 账本对不上就等于没有账本。
  *
  * ### 本文件的三条硬约定
  *
@@ -25,6 +37,8 @@ import {
   FIXED_QUIZ,
   SYMBOLIC_ENGINE,
   createTeachingModule,
+  orchestrateQuiz,
+  orchestrateTutor,
   verifySupplementContent,
   type AllowedRef,
   type MaterialSlice,
@@ -44,6 +58,8 @@ import type {
   ParseResponse,
   PrerequisiteStatus,
   ProfileResponse,
+  QuizAttemptResponse,
+  QuizAttemptResult,
   QuizResponse,
   LoginResponse,
   MeResponse,
@@ -92,6 +108,7 @@ import {
   type Guard,
 } from './request-guards.js';
 import { buildDroppedBlocks } from './student-reason.js';
+import { deriveAttribution, readAttemptAnswer } from './quiz-attribution.js';
 import { authenticate, issueToken, resolveToken, revokeToken } from '../auth/index.js';
 import {
   SessionNotFoundError,
@@ -485,10 +502,50 @@ apiRouter.post(
      * 因此它与 `allowedRefs` 同为空／非空 —— 只要存在一个可引用的来源就要求绑定。
      */
     const requireAuthorization = materials.length > 0;
-    const { valid, rejected } = teaching.validateAnswerBlocks(result.blocks, allowedRefs, {
-      requireAuthorization,
-    });
-    if (valid.length === 0 && rejected.length > 0) {
+
+    /*
+     * 验证 Agent 走编排层（`P-B8`，E18）：它**失败时主流程继续**，
+     * 本次回答降级为「未验证」并如实标注，而不是把整次答疑判失败。
+     *
+     * 校验结果用闭包接出来 —— `orchestrateTutor` 只关心"这一环成没成"，
+     * 不关心它产出的业务数据长什么样（那样编排层就不必认识 `AnswerBlock`）。
+     */
+    let validated: ReturnType<typeof teaching.validateAnswerBlocks> | null = null;
+    const orchestration = await orchestrateTutor(
+      {
+        tutor: async () => result.blocks,
+        verifier: () => {
+          validated = teaching.validateAnswerBlocks(result.blocks, allowedRefs, {
+            requireAuthorization,
+          });
+          return 'symbolic';
+        },
+      },
+      {
+        onAgentError: (agent, error) =>
+          logger.error('agent.failed', { agent, error: redact(error, []).slice(0, 300) }),
+      },
+    );
+
+    const verifierFailed = orchestration.degraded.some((item) => item.agent === 'verifier');
+
+    /*
+     * 验证 Agent 挂掉时的降级方向：**一律降为 `unverified`**。
+     *
+     * ⚠️ 这是本次唯一一处"宁可少说也不多说"的取舍，值得写清楚：
+     * 校验没跑，我们既不知道哪一块该拒、也不知道哪一块真的可信。此时
+     * - 若把这些块原样按模型自称的 `verification` 展示，就等于**替没有跑过的校验背书**；
+     * - 若整批拒绝（403），则把"校验环节故障"变成了"学生看不到答案"—— E18 明确要求主流程继续。
+     *
+     * 因此取中间：**照常给出内容，但把验证状态一律降到 `unverified`**，
+     * 并把降级说明挂在响应上。§4.2 的"未验证不得默认视为正确"由此满足，
+     * §4.3 的来源校验则**确实没有执行** —— 这一点由 `degraded` 明说，不含糊。
+     */
+    const { valid, rejected } = validated ?? {
+      valid: result.blocks.map((block) => ({ ...block, verification: 'unverified' as const })),
+      rejected: [] as ReturnType<typeof teaching.validateAnswerBlocks>['rejected'],
+    };
+    if (!verifierFailed && valid.length === 0 && rejected.length > 0) {
       throw new ApiError(
         'UNAUTHORIZED_CONTENT',
         `回答未通过来源校验：${rejected.map((item) => item.reason).join('；')}`,
@@ -516,6 +573,8 @@ apiRouter.post(
       // `I14`：有块通过时，其余被拒的块不得无声消失（§4.3「不静默」）——
       // 构造逻辑见 `student-reason.ts` 的 `buildDroppedBlocks()`，无丢弃时为 `null`
       ...(droppedBlocks ? { droppedBlocks } : {}),
+      // `P-B8`/E18：有 Agent 失败就如实标注，**不得静默**（无降级时不出现该字段）
+      ...(orchestration.degraded.length > 0 ? { degraded: orchestration.degraded } : {}),
     };
     res.json(response);
   }),
@@ -769,21 +828,41 @@ apiRouter.post(
         return;
       }
 
-      const variantItems = await teaching.generateVariantQuiz({
-        weakConcepts: weak,
-        count: MATERIAL_QUIZ_PER_TOPIC,
-        materials: toSlices(session),
-      });
+      /*
+       * 出题 Agent 失败 ⇒ **回落到固定题**（§4.5、用例 E18）。
+       *
+       * 回落时必须**同时改掉来源标注**（`source` 由 `'variant'` 变成 `'fixed'`）：
+       * 换个说法继续标"针对需加强的概念"就是冒名，比不给题更糟（§9）。
+       * 这次回落由 `degraded` 如实带出，界面据此说明"这批不是按你的画像出的"。
+       */
+      const orchestrated = await orchestrateQuiz(
+        () =>
+          teaching.generateVariantQuiz({
+            weakConcepts: weak,
+            count: MATERIAL_QUIZ_PER_TOPIC,
+            materials: toSlices(session),
+          }),
+        () => FIXED_QUIZ[topic] ?? [],
+        { onAgentError: (agent, error) => logger.error('agent.failed', { agent, error: redact(error, []).slice(0, 300) }) },
+      );
 
       const variantResponse: QuizResponse = {
-        items: variantItems.map((item, index) => ({
+        items: orchestrated.items.map((item, index) => ({
           ...item,
           id: item.id ?? `variant-${index}`,
           topic,
-          // 来源由服务端定：模型自报来源不可信（见 generateVariantQuiz 的注释）
-          source: 'variant',
-          verification: item.verification ?? DEFAULT_VERIFICATION,
+          /*
+           * 来源由服务端定：模型自报来源不可信（见 generateVariantQuiz 的注释）。
+           * 发生回落时**整批**都是自编题 —— 逐题按 `degraded` 是否为空来定，
+           * 而不是看模型有没有给 `source`。
+           */
+          source: orchestrated.degraded.length > 0 ? 'fixed' : 'variant',
+          verification:
+            orchestrated.degraded.length > 0
+              ? 'human' // 自编题经人工核验（与 `source: 'fixed'` 同一口径）
+              : (item.verification ?? DEFAULT_VERIFICATION),
         })),
+        ...(orchestrated.degraded.length > 0 ? { degraded: orchestrated.degraded } : {}),
       };
       res.json(variantResponse);
       return;
@@ -820,22 +899,33 @@ apiRouter.post(
       );
     }
 
-    const items = await teaching.generateQuizFromMaterial({
-      topic,
-      count: MATERIAL_QUIZ_PER_TOPIC,
-      materials: toSlices(session),
-    });
+    /* 出题 Agent 失败 ⇒ 回落到固定题（§4.5、E18），来源标注同时改口 */
+    const orchestrated = await orchestrateQuiz(
+      () =>
+        teaching.generateQuizFromMaterial({
+          topic,
+          count: MATERIAL_QUIZ_PER_TOPIC,
+          materials: toSlices(session),
+        }),
+      () => FIXED_QUIZ[topic] ?? [],
+      {
+        onAgentError: (agent, error) =>
+          logger.error('agent.failed', { agent, error: redact(error, []).slice(0, 300) }),
+      },
+    );
 
+    const fellBack = orchestrated.degraded.length > 0;
     const response: QuizResponse = {
-      items: items.map((item, index) => ({
+      items: orchestrated.items.map((item, index) => ({
         ...item,
         id: item.id ?? `gen-${topic}-${index}`,
         topic,
-        // 必须标注来源，不能伪装成上传讲义原题（说明书 2.6）
-        source: 'material',
-        // 生成题缺省「未验证」（§4.2）
-        verification: item.verification ?? DEFAULT_VERIFICATION,
+        // 必须标注来源，不能伪装成上传讲义原题（说明书 2.6）；回落时同样改口
+        source: fellBack ? 'fixed' : 'material',
+        // 生成题缺省「未验证」（§4.2）；自编题经人工核验
+        verification: fellBack ? 'human' : (item.verification ?? DEFAULT_VERIFICATION),
       })),
+      ...(fellBack ? { degraded: orchestrated.degraded } : {}),
     };
     res.json(response);
   }),
@@ -886,6 +976,65 @@ apiRouter.post(
     const profile = commitProfileEvents(session, events);
 
     const response: ProfileResponse = profile;
+    res.json(response);
+  }),
+);
+
+/* ==================== POST /api/quiz/attempt（P-B9，2026-09-23） ==================== */
+
+/**
+ * 提交一次练习：判分 + **错题归因** + 写画像，一次往返完成。
+ *
+ * ### 为什么单独开一个端点，而不是复用 `POST /api/profile`
+ *
+ * `/api/profile` 是**通用的事件投递口**：调用方说什么事件就记什么事件。
+ * 而这里要做的事性质不同 —— 服务端要**按 `itemId` 反查题库**才能判分与归因，
+ * 也就是端点本身要参与领域判断。把这段逻辑塞进事件投递口，会让
+ * "画像能记什么"取决于"投递口会算算什么"，两边都说不清。
+ *
+ * ⚠️ 端点清单因此由 10 个变成 11 个（见本文件抬头，已同步）。
+ *
+ * ### 归因怎么保证可核对（§2.6）
+ *
+ * 请求里只有 `itemId` + `selectedOptionId`；**正确答案由服务端从题库取**。
+ * 判分与归因同源，不存在"判对了却归错了题"的错位。拿不到归因的（生成的题、
+ * 推不出来的题）如实返回 `attribution: null` 并计入 `unattributed` —— 不编。
+ *
+ * ### 失败不影响主流程（§4.5）
+ *
+ * 画像写入失败**不回滚判分**：`results` 照样返回。学生做过的题与对错不因
+ * 存储故障而改变，界面只需说明"画像可能未更新"。
+ */
+apiRouter.post(
+  '/quiz/attempt',
+  asyncHandler(async (req, res) => {
+    const body = readBody(req);
+    const sessionId = unwrap(guardSessionId(body.sessionId));
+    const session = requireSession(sessionId);
+
+    const rawAnswers = Array.isArray(body.answers) ? body.answers : [];
+    const at = new Date().toISOString();
+
+    const derived = rawAnswers
+      .map((raw) => readAttemptAnswer(raw))
+      .filter((answer): answer is NonNullable<typeof answer> => answer !== null)
+      .map((answer) => deriveAttribution(answer, session.id, at));
+
+    const results: QuizAttemptResult[] = derived.map((item) => item.result);
+    /* `attribution === null` 且**答错**的才叫"没能归因"——答对本来就不归因 */
+    const unattributed = results.filter((item) => !item.correct && !item.attribution).length;
+
+    /*
+     * 归因事件与本次作答一起落库。`quiz-attribution` 由 store 按 `kind + pattern`
+     * 累计进画像的「常见误区」——这正是此前断掉的那一环（契约与界面都在，没有生产者）。
+     */
+    const events = derived
+      .map((item) => item.event)
+      .filter((event): event is NonNullable<typeof event> => event !== null);
+
+    const profile = commitProfileEvents(session, events);
+
+    const response: QuizAttemptResponse = { results, profile, unattributed };
     res.json(response);
   }),
 );

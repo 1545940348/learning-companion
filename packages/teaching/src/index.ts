@@ -36,8 +36,11 @@ export * from './prompt.js';
 export * from './tasks.js';
 export * from './validate.js';
 export * from './fixed-quiz.js';
+export * from './fixed-quiz-misconceptions.js';
 export * from './latex.js';
 export * from './symbolic.js';
+export * from './attribution.js';
+export * from './orchestrate.js';
 
 export interface TeachingModule {
   answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionOutput>;

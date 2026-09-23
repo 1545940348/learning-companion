@@ -19,6 +19,7 @@ import type {
   PrerequisiteRelation,
   PrerequisiteStatus,
   ProfileEvent,
+  QuizAttemptAnswer,
   QuizItem,
   QuizSource,
   Topic,
@@ -51,7 +52,7 @@ import type {
   FailedAction,
   GapRecord,
   Notice,
-  QuizReportOutcome,
+  QuizReport,
   SessionHistoryEntry,
   TutorTurn,
   UiMaterial,
@@ -64,6 +65,7 @@ export type {
   FailedAction,
   GapRecord,
   Notice,
+  QuizReport,
   QuizReportOutcome,
   SessionHistoryEntry,
   TutorTurn,
@@ -837,31 +839,21 @@ export function useWorkbench(): WorkbenchState & WorkbenchActions {
   /* ---------- 图谱与画像 ---------- */
 
   const reportQuizAttempt = useCallback(
-    async (payload: {
-      topic: Topic;
-      source: QuizSource;
-      total: number;
-      correct: number;
-    }): Promise<QuizReportOutcome> => {
+    async (payload: { answers: QuizAttemptAnswer[] }): Promise<QuizReport> => {
       const id = sessionRef.current;
       // I33：自编题路径没有会话 → 这里**没有发出任何请求**，必须如实告诉界面
-      if (!id) return 'no-session';
+      if (!id) return { outcome: 'no-session', results: [], unattributed: 0 };
       try {
-        const next = await api.profile({
-          sessionId: id,
-          events: withSessionId(id, [
-            {
-              type: 'quiz-attempted',
-              at: new Date().toISOString(),
-              payload: { ...payload },
-            },
-          ]),
-        });
-        setProfile(next);
-        return 'sent';
+        /*
+         * 判分与归因都在服务端做（`P-B9`）：前端只送"学生选了哪个选项"。
+         * 返回的 `results` 里带**逐题的可核对归因**，由面板显示在错题下面。
+         */
+        const next = await api.quizAttempt({ sessionId: id, answers: payload.answers });
+        setProfile(next.profile);
+        return { outcome: 'sent', results: next.results, unattributed: next.unattributed };
       } catch {
         // 画像写入失败不阻断练习（§4.5：任一 Agent 失败不影响主流程）
-        return 'failed';
+        return { outcome: 'failed', results: [], unattributed: 0 };
       }
     },
     [],

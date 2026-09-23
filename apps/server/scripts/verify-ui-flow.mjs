@@ -246,12 +246,159 @@ const profile2 = (
 ).json;
 check('⑩ gap-supplemented 计入画像', profile2.mastery[gapConcept] === 'SUPPLEMENTED', profile2.mastery);
 
+/*
+ * 10b. 提交练习 → 错题归因（`P-B9`，2026-09-23）
+ *
+ * 这一段走的是**真实 HTTP**，因此覆盖的是整条链的最后一环：
+ * 请求 → 服务端按 itemId 反查题库 → 判分 → 归因 → 写画像 → 回传逐题结论。
+ * 归因判据本身在 `verify:graph` 的 §15 里离线覆盖（那边能测到 27 个干扰项）。
+ *
+ * 这里的重点有两个，都是**离线测不出来**的：
+ * ① 同一个坑在**不同题目**上踩两次，画像里的 `count` 必须累到 2
+ *    （这才叫"常见误区"，否则画像只是一串各说各话的句子）；
+ * ② 题库里没有的题（按材料生成的）**不许**被编出一个错因。
+ */
+const monItems = fixed.items;
+const wrong1 = monItems.find((i) => i.id === 'fx-mon-1');
+const wrong3 = monItems.find((i) => i.id === 'fx-mon-3');
+const right2 = monItems.find((i) => i.id === 'fx-mon-2');
+check('⑩b 自编主题题齐备（fx-mon-1/2/3）', Boolean(wrong1 && wrong3 && right2));
+
+/* 两道错题：fx-mon-1 选 A、fx-mon-3 选 B —— 都是"把导数符号与单调性对应关系记反" */
+const attempt = (
+  await call('POST', '/api/quiz/attempt', {
+    sessionId: session.id,
+    answers: [
+      { itemId: 'fx-mon-1', selectedOptionId: 'A' },
+      { itemId: 'fx-mon-3', selectedOptionId: 'B' },
+      { itemId: 'fx-mon-2', selectedOptionId: 'B' },
+    ],
+  })
+).json;
+
+check('⑩b 提交返回逐题结果（3 条）', attempt?.results?.length === 3, attempt?.results?.length);
+check(
+  '⑩b 判分在服务端完成：fx-mon-2 选 B 判对，另两题判错',
+  attempt.results.find((r) => r.itemId === 'fx-mon-2')?.correct === true &&
+    attempt.results.filter((r) => !r.correct).length === 2,
+);
+
+const a1 = attempt.results.find((r) => r.itemId === 'fx-mon-1')?.attribution;
+const a3 = attempt.results.find((r) => r.itemId === 'fx-mon-3')?.attribution;
+check(
+  '⑩b 两道错题都给出了归因（概念误解），不是 null',
+  a1?.kind === 'concept-misunderstanding' && a3?.kind === 'concept-misunderstanding',
+  `${a1?.kind} / ${a3?.kind}`,
+);
+check(
+  '⑩b 归因带**可核对的证据**（学生选的原文 vs 正确原文，两侧都在）',
+  Boolean(a1?.evidence?.selectedText && a1?.evidence?.correctText),
+  a1?.evidence,
+);
+check(
+  '⑩b 归因依据如实标为「干扰项预标注」（basis/verification 不夸大）',
+  a1?.basis === 'option-tag' && a1?.verification === 'human',
+  `${a1?.basis} / ${a1?.verification}`,
+);
+check(
+  '⑩b 答对的那题**不归因**（归因只描述"错在哪"）',
+  attempt.results.find((r) => r.itemId === 'fx-mon-2')?.attribution === null,
+);
+check('⑩b 没有推不出来的错题（unattributed = 0）', attempt.unattributed === 0);
+
+/*
+ * ★★ 本段的核心断言：**跨题累计**。
+ * 两道题不属于同一题号，但属于**同一个坑** ⇒ 画像里应当只有 1 条、count = 2。
+ * 若 `pattern` 写成了逐题各异的句子，这里会变成两条 count = 1 —— 那就是
+ * "画像记了一堆各说各话的话，却数不出学生反复踩的是哪个坑"。
+ */
+const samePattern = attempt.profile.misconceptions.filter(
+  (m) => m.pattern === a1?.pattern && m.kind === 'concept-misunderstanding',
+);
+check(
+  '⑩b ★★ 同一个坑在不同题目上累加到同一条（count = 2，不是两条 count = 1）',
+  attempt.profile.misconceptions.length === 1 && samePattern[0]?.count === 2,
+  attempt.profile.misconceptions,
+);
+
+/* 再提交一次同样的错法 ⇒ 累计继续涨（画像不是"最后一笔覆盖"） */
+const again2 = (
+  await call('POST', '/api/quiz/attempt', {
+    sessionId: session.id,
+    answers: [{ itemId: 'fx-mon-1', selectedOptionId: 'A' }],
+  })
+).json;
+check(
+  '⑩b 重复踩同一个坑 → count 继续累加（3）',
+  again2.profile.misconceptions[0]?.count === 3,
+  again2.profile.misconceptions,
+);
+
+/*
+ * ★★ 诚实性：题库里没有的题**不许**被编出错因。
+ * `not-in-bank-1` 模拟按材料/变式生成的题（服务端不持有它们）。
+ */
+const unknown = (
+  await call('POST', '/api/quiz/attempt', {
+    sessionId: session.id,
+    answers: [{ itemId: 'not-in-bank-1', selectedOptionId: 'A' }],
+  })
+).json;
+check(
+  '⑩b ★★ 题库外的题不编错因：attribution 为 null 且计入 unattributed',
+  unknown.results[0]?.attribution === null && unknown.unattributed === 1,
+  unknown.results[0],
+);
+check(
+  '⑩b 题库外的题不被计入画像「常见误区」（没有依据就不写）',
+  unknown.profile.misconceptions.reduce((sum, m) => sum + m.count, 0) === 3,
+  unknown.profile.misconceptions,
+);
+
+/*
+ * 参数校验：会话不存在要**明确报错**，不能静默成功。
+ *
+ * 口径与其余接口一致（`requireSession` → `SESSION_NOT_FOUND` → 404）：
+ * 这是"你指的会话不存在"，不是"你的请求写错了"（那才是 400）。
+ */
+const badAttempt = await call('POST', '/api/quiz/attempt', {
+  sessionId: 'no-such-session',
+  answers: [{ itemId: 'fx-mon-1', selectedOptionId: 'A' }],
+});
+check('⑩b 会话不存在 → 404（与其它接口口径一致，不静默成功）', badAttempt.status === 404, badAttempt.status);
+
+
 /* 11. 轻路径（不建会话） */
 const light = (
   await call('POST', '/api/tutor', { sessionId: null, materialVersion: 0, question: '什么是切线？', mode: 'explain' })
 ).json;
 check('⑪ 轻路径（sessionId=null）可答疑', Array.isArray(light.blocks) && light.blocks.length > 0);
 check('⑪ 轻路径标注未基于材料', light.basedOnMaterial === false);
+
+/*
+ * 10c. 降级字段的**线上形状**（`P-B8`，E18）
+ *
+ * 【为什么这条排在⑪之后而不是⑩旁边】本段要同时看「有材料」「轻路径」「固定题」
+ * 三种正常响应的形状，其中轻路径的 `light` 在⑪才声明。放在⑩的位置会撞上
+ * `const` 的暂时性死区（TDZ）—— 第一版就是这么写的，跑起来直接 `ReferenceError`。
+ * 断言顺序服从数据依赖，不为了让编号好看而重排声明。
+ *
+ * 【这条只能在这里测什么】`degraded` 的**取值分支**由 `verify:graph` §16 用
+ * **注入的假 Agent** 覆盖（那边能构造任意一个 Agent 挂掉）；而"一切正常时这个字段
+ * **不出现**"是关于真实响应体的约定 —— 契约写明它"缺省即没有异常，不必到处写空数组"。
+ * 两处合起来才构成完整结论：异常时必出现、正常时不出现。
+ *
+ * ⚠️ **如实说明本段测不到什么**：`MODEL_PROVIDER=mock` 的假模型
+ * **没有失败注入开关**，因此"真实 HTTP 上一次 Agent 失败后仍能拿到降级标注"
+ * 这条端到端路径**在这里验不了**。它目前只由 §16 的离线注入覆盖。
+ * 不为了凑绿而给 mock 加一个只有测试用的失败开关 —— 那会让"降级路径已验证"
+ * 这句话变得含糊（验证的是开关，不是真实故障）。
+ */
+check(
+  '⑩c 一切正常时响应里**不带** degraded（契约：缺省即无异常）',
+  !('degraded' in generated) && !('degraded' in light) && !('degraded' in fixed),
+  { generated: 'degraded' in generated, light: 'degraded' in light, fixed: 'degraded' in fixed },
+);
 
 /* 12. 跨会话隔离（用例 E10） */
 const other = (await call('POST', '/api/session')).json;
@@ -465,6 +612,72 @@ console.log('\n=== 测试材料库：清单可加载、能跑通真实链路 ===
   check('★ 材料版本被推进（材料真的落盘了）', fixtureKnowledge.json?.materialVersion === 1);
 }
 
+/* ==================== 教学素材（P-B15，2026-09-23） ==================== */
+
+console.log('\n=== 教学素材：图片与语音真的能过线（清单与缺口在 verify:teaching-materials 里离线验）===\n');
+{
+  /*
+   * 这里只留**过线**的那几条：素材是文件系统的事，图片/语音能不能真的走通接口才是这一层的事。
+   *
+   * 清单形状、「九格填满」、「单调性素材搜不到导数的定义」全部搬去了
+   * `verify:teaching-materials`（进 `verify:all` 的离线套装）。**不在这里重复断言同一件事** ——
+   * 尤其那条缺口检查：它必须在**每次改动都会跑的离线套装**里，而不是"有没有人刚起了服务端"
+   * 才跑的套装里。两边各管一段，改一处不会忘另一处。
+   */
+  const teaching = await import('../../../fixtures/teaching-materials/load.mjs');
+
+  const imgParse = await call('POST', '/api/parse', {
+    imageBase64: teaching.loadImageBase64('derivative-image'),
+  });
+  check('★ 教学素材的 PNG 被 /api/parse 的图片通道**接受**（200，不是 400）', imgParse.status === 200, imgParse.status);
+  check(
+    '★ 识别结果里有文本（mock 给的是固定演示数据，**这不代表图被认对了**）',
+    typeof imgParse.json?.text === 'string' && imgParse.json.text.length > 0,
+  );
+  /*
+   * ⚠️ 上面两条**只能证明"这张 PNG 通过了魔数嗅探与体积校验"**。
+   * mock 通道不看图的内容、永远返回同一段演示数据，所以"图里的抛物线被识别成了抛物线"
+   * 这件事**在这里验不了**，要真实模型通道实测（`npm run smoke:model:image`）。
+   * 不写一条"识别结果包含 抛物线"的断言来充数 —— 它在 mock 下必红，在真实通道下又
+   * 依赖模型措辞，两条路都不是"验证"，是"猜"。
+   */
+
+  /*
+   * 坏签名必须被拒。**这条是上一条 200 的对照组**：只有"收得下真图、也拒得了假图"，
+   * 前面那条才说明"通道真的在校验"，而不是"什么都收"。
+   */
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const pngPath = fileURLToPath(
+    new URL('../../../fixtures/teaching-materials/images/derivative.png', import.meta.url),
+  );
+  const brokenPng = Buffer.from(readFileSync(pngPath));
+  brokenPng[0] = 0x00; // 把 PNG 签名的第一个字节改掉：还是一张"图"，但不再是 PNG
+  const rejected = await call('POST', '/api/parse', { imageBase64: brokenPng.toString('base64') });
+  check(
+    '★★ 签名被破坏的"图"被 400 拒（证明上面那条 200 不是"什么都收"）',
+    rejected.status === 400,
+    rejected.status,
+  );
+
+  /*
+   * 语音：只带语音不带文字 → 400，并说明"语音不由服务端转写"。
+   * 这是**语音素材只有转写文本、没有音频**这条事实在接口上的落点 ——
+   * 哪天服务端真的接了 ASR，这条会红，正好提醒去改素材里的标注。
+   *
+   * 错误消息在 `json.error.message`（本项目统一的错误体形状），不是 `json.message`：
+   * 第一版按后者取，拿到的永远是 undefined（好在是报失败，不是悄悄变成真）。
+   */
+  const audioParse = await call('POST', '/api/parse', {
+    audioBase64: Buffer.from('not-really-audio').toString('base64'),
+  });
+  const audioMessage = String(audioParse.json?.error?.message ?? '');
+  check(
+    '★★ 只带语音不带文字 → 400，且说明"语音不由服务端转写"（与 D3）、识别在浏览器侧',
+    audioParse.status === 400 && audioMessage.includes('语音不由服务端转写'),
+    `${audioParse.status} ${audioMessage.slice(0, 40)}`,
+  );
+}
 /* ==================== GET /api/teacher（P-C11，2026-09-23 由 501 改为已实现） ==================== */
 
 console.log('\n=== 教师视图：班级聚合（只含计数，不反推个人） ===\n');

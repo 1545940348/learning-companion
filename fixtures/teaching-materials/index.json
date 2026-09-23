@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "note": "P-B15 教学素材：3 主题 × 3 形态，共 9 份。与 fixtures/materials（联调用的边界材料）用途不同 —— 那一套测边界，这一套是**演示与教学**用的成稿素材。见 README.md。",
+  "topics": [
+    {
+      "id": "derivative",
+      "title": "导数：从平均变化率到瞬时变化率",
+      "prerequisiteGap": null,
+      "note": "本主题**给出了导数的定义**（极限形式）与几何意义 ⇒ 没有前置缺口，是补缺口时要补上的那一份。"
+    },
+    {
+      "id": "tangent",
+      "title": "切线方程：一点加一个斜率",
+      "prerequisiteGap": null,
+      "note": "本主题直接使用 f′(x₀)，并在文中给出了导数公式表 ⇒ 与「导数」主题同源，无前置缺口。",
+      "caveat": "⚠️ **`prerequisiteGap: null` 不等于「本主题自足」。** 切线素材同样**没有给出导数的定义**，它只是给了导数公式表（能算出 f′(x₀)）并在易错点里提到「切线是割线的极限位置」。换句话说，它比单调性素材多给了一点，但**仍然依赖「导数」这一前置**。这一栏为 null 的准确含义是：**这条缺口不是本主题刻意保留的**（刻意保留只针对单调性，那是 P-B15 的验收要求），不是说它不存在。"
+    },
+    {
+      "id": "monotonicity",
+      "title": "用导数判断单调性",
+      "prerequisiteGap": "derivative",
+      "note": "**刻意保留导数前置缺口**（P-B15 验收原话：「单调性素材必须保留导数前置缺口（演示案例的前提）」）。三份单调性素材都只用结论与用法，**通篇不给导数的定义** —— 连「导数是一个极限」「导数是切线斜率」这类一句话的提示也不给，因为给了等于把缺口填上了，MISSING 就不会被标出来，演示路径随之失效。"
+    }
+  ],
+  "forms": ["text", "image", "voice"],
+  "materials": [
+    {
+      "id": "derivative-text",
+      "topic": "derivative",
+      "form": "text",
+      "file": "text/01-derivative.md",
+      "title": "讲义：导数的定义（极限形式）与几何意义",
+      "scenario": "完整的一节讲义，含平均变化率 → 极限 → 导数 → 切线斜率的完整推导，末尾带一道按定义求导的例题",
+      "expect": "应抽出「导数」「切线」「平均变化率」等知识点并形成关系边；**「导数」在这份材料里有定义** ⇒ 不应被标为缺口",
+      "prerequisiteGap": null
+    },
+    {
+      "id": "derivative-image",
+      "topic": "derivative",
+      "form": "image",
+      "file": "images/derivative.png",
+      "title": "示意图：割线 PQ 与切线（抛物线 F(X)=X^2）",
+      "scenario": "程序生成的函数示意图；抛物线上的 P(1,1) 与 Q(2,4)、绿线为割线、红线为切线",
+      "expect": "走图片通道（POST /api/parse 的 imageBase64）；应识别出抛物线、两条直线与三个关键点",
+      "prerequisiteGap": null,
+      "figure": {
+        "generator": "generate-images.mjs",
+        "figureId": "derivative",
+        "width": 640,
+        "height": 440,
+        "source": "程序生成",
+        "caption": "抛物线 F(X)=X^2 上取 P(1,1) 与 Q(2,4)；绿线是过两点的割线（斜率 3），红线是 P 处的切线（斜率 2）。"
+      }
+    },
+    {
+      "id": "derivative-voice",
+      "topic": "derivative",
+      "form": "voice",
+      "file": "voice/01-derivative.md",
+      "title": "口语讲解转写：导数是什么",
+      "scenario": "一段课堂口语讲解的**转写文本**（走路/赶路的比方 → 割线转成切线 → 导数是什么）",
+      "expect": "作为材料使用时与文字素材同管道；应抽出「导数」「切线」「割线」并形成关系边",
+      "prerequisiteGap": null,
+      "audio": {
+        "stored": false,
+        "transcribedBy": "browser",
+        "serverSideTranscription": false,
+        "note": "**仓库里没有音频文件，也不会有。** 见 README「语音素材」一节。"
+      }
+    },
+
+    {
+      "id": "tangent-text",
+      "topic": "tangent",
+      "form": "text",
+      "file": "text/02-tangent.md",
+      "title": "笔记：切线方程 y − f(x₀) = f′(x₀)(x − x₀)",
+      "scenario": "公式密集的课堂笔记：核心公式 + 三个例题（抛物线／三次函数／水平切线）+ 两个易错点",
+      "expect": "公式应被识别为 LaTeX；可用于测符号验证（切线方程、斜率、切点坐标三类断言）",
+      "prerequisiteGap": null,
+      "caveat": "同样**不给导数的定义**（只给导数公式表），见 topics 里 tangent 的 caveat。"
+    },
+    {
+      "id": "tangent-image",
+      "topic": "tangent",
+      "form": "image",
+      "file": "images/tangent.png",
+      "title": "示意图：三次函数在 X=-1.5 处的切线",
+      "scenario": "程序生成的函数示意图；曲线 F(X)=X^3-3X 与它在 X=-1.5 处的切线（斜率 3.75），虚线把切点横坐标落到 x 轴",
+      "expect": "走图片通道；应识别出三次曲线、切线、切点与虚线",
+      "prerequisiteGap": null,
+      "caveat": "图里同样只用 F'(X) 而不定义它，见 topics 里 tangent 的 caveat。",
+      "figure": {
+        "generator": "generate-images.mjs",
+        "figureId": "tangent",
+        "width": 640,
+        "height": 440,
+        "source": "程序生成",
+        "caption": "曲线 F(X)=X^3-3X 在 X=-1.5 处的切线（红），斜率 3.75；虚线把切点的横坐标落到 x 轴上。切点取 -1.5 而非 0.5：0.5 处的切线恰好穿过曲线自己的极大值点 (-1,2)，图上会像「一条在两个地方都贴上曲线的直线」，对讲切线是帮倒忙（推导见 generate-images.mjs 的注释）。"
+      }
+    },
+    {
+      "id": "tangent-voice",
+      "topic": "tangent",
+      "form": "voice",
+      "file": "voice/02-tangent.md",
+      "title": "口语讲解转写：切线方程三步",
+      "scenario": "一段课堂口语讲解的**转写文本**（先给公式，再走两个例题，最后讲两个易错点）",
+      "expect": "作为材料使用时与文字素材同管道；应抽出「切线」「导数」「极值」并形成关系边",
+      "prerequisiteGap": null,
+      "caveat": "同样**不给导数的定义**（只给导数公式表），见 topics 里 tangent 的 caveat。",
+      "audio": {
+        "stored": false,
+        "transcribedBy": "browser",
+        "serverSideTranscription": false,
+        "note": "**仓库里没有音频文件，也不会有。** 见 README「语音素材」一节。"
+      }
+    },
+
+    {
+      "id": "monotonicity-text",
+      "topic": "monotonicity",
+      "form": "text",
+      "file": "text/03-monotonicity.md",
+      "title": "笔记：用导数判断单调性（**只给结论，不给导数的定义**）",
+      "scenario": "学生自己的课堂笔记：记下了「看导数符号判断增减」的用法与三个例题，但**通篇没有导数的定义**",
+      "expect": "应抽出「单调性」并把「导数」标为**前置缺口**（MISSING）⇒ 用于演示 M → S → V 的补缺口流转与「单调性素材保留导数前置缺口」这条验收",
+      "prerequisiteGap": "derivative"
+    },
+    {
+      "id": "monotonicity-image",
+      "topic": "monotonicity",
+      "form": "image",
+      "file": "images/monotonicity.png",
+      "title": "示意图：按 F'(X) 的符号给曲线分段着色（**F' 未定义**）",
+      "scenario": "程序生成的函数示意图；同一曲线 F(X)=X^3-3X 按 F'(X) 正负分成蓝（>0，递增）与橙（<0，递减）三段，图例里明写 F-PRIME NOT DEFINED HERE",
+      "expect": "走图片通道；缺口在**图上就是可见的** —— 图用了 F'(X) 却从不解释它是什么，图例里直接印着 F-PRIME NOT DEFINED HERE",
+      "prerequisiteGap": "derivative",
+      "figure": {
+        "generator": "generate-images.mjs",
+        "figureId": "monotonicity",
+        "width": 640,
+        "height": 440,
+        "source": "程序生成",
+        "caption": "同一曲线按 F'(X) 的正负分成蓝（>0）与橙（<0）三段，分界在 X=-1 与 X=1。曲线按导数符号着色、却**不解释 F' 是什么** —— 这就是要保留的那个缺口，图例里的 F-PRIME NOT DEFINED HERE 是刻意加的。"
+      }
+    },
+    {
+      "id": "monotonicity-voice",
+      "topic": "monotonicity",
+      "form": "voice",
+      "file": "voice/03-monotonicity.md",
+      "title": "口语讲解转写：单调性三步法（**只讲用法，不讲导数是什么**）",
+      "scenario": "一段课堂口语讲解的**转写文本**：讲「看导数符号」的三步法与两个例题，**从头到尾不解释导数**",
+      "expect": "应抽出「单调性」并把「导数」标为前置缺口（MISSING），与 monotonicity-text 同结论",
+      "prerequisiteGap": "derivative",
+      "audio": {
+        "stored": false,
+        "transcribedBy": "browser",
+        "serverSideTranscription": false,
+        "note": "**仓库里没有音频文件，也不会有。** 见 README「语音素材」一节。"
+      }
+    }
+  ]
+}

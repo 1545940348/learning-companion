@@ -19,6 +19,8 @@ import type {
   ParseResponse,
   ProfileRequest,
   ProfileResponse,
+  QuizAttemptRequest,
+  QuizAttemptResponse,
   QuizRequest,
   QuizResponse,
   Session,
@@ -200,6 +202,19 @@ export const api = {
 
   profile: (payload: ProfileRequest) =>
     request<ProfileResponse>('/profile', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /**
+   * 提交一次练习：判分 + 错题归因 + 写画像（`P-B9`，2026-09-23）。
+   *
+   * 只送 `itemId` + `selectedOptionId` —— **正确答案不由前端提供**，
+   * 由服务端按 `itemId` 反查题库。这是"归因可核对"的前提：
+   * 判分依据不能来自被评估方。
+   */
+  quizAttempt: (payload: QuizAttemptRequest) =>
+    request<QuizAttemptResponse>('/quiz/attempt', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   /**
    * 教师视图：班级聚合（`P-A6` 接入，2026-09-23）。
