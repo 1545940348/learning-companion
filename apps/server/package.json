@@ -21,13 +21,14 @@
     "verify:serve-web": "tsx scripts/verify-serve-web.mjs",
     "verify:dist": "node scripts/verify-dist.mjs",
     "verify:flow": "tsx scripts/verify-ui-flow.mjs",
-    "verify:all": "npm run verify:store && npm run verify:errors && npm run verify:guards && npm run verify:graph && npm run verify:symbolic && npm run verify:vision",
+    "verify:all": "npm run verify:store && npm run verify:errors && npm run verify:guards && npm run verify:graph && npm run verify:symbolic && npm run verify:vision && npm run verify:teaching-materials",
     "smoke:model": "tsx src/model/smoke.ts",
     "smoke:model:selfcheck": "tsx src/model/smoke.ts selfcheck",
     "smoke:model:text": "tsx src/model/smoke.ts text",
     "smoke:model:structured": "tsx src/model/smoke.ts structured",
     "smoke:model:image": "tsx src/model/smoke.ts image",
-    "smoke:model:deepseek": "tsx src/model/smoke.ts deepseek"
+    "smoke:model:deepseek": "tsx src/model/smoke.ts deepseek",
+    "verify:teaching-materials": "tsx scripts/verify-teaching-materials.mjs"
   },
   "dependencies": {
     "@tencent-ai/agent-sdk": "^0.3.259",

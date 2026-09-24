@@ -10,6 +10,8 @@ export * from './knowledge.js';
 export * from './tutor.js';
 export * from './quiz.js';
 export * from './profile.js';
+// 多智能体协作与降级（`P-B8`，E18）
+export * from './agents.js';
 // 账号与登录（演示级，见 auth.ts 顶部的三条说明）
 export * from './auth.js';
 export * from './api.js';

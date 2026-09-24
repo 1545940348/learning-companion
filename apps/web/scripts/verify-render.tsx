@@ -22,7 +22,12 @@
 import * as React from 'react';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { GraphNeighborhood, HealthResponse, LearnerProfile } from '@lc/contracts';
+import type {
+  GraphNeighborhood,
+  HealthResponse,
+  LearnerProfile,
+  QuizAttribution,
+} from '@lc/contracts';
 import type {
   GapRecord,
   TutorTurn,
@@ -47,6 +52,8 @@ import { KnowledgePanel } from '../src/components/KnowledgePanel';
 import { MaterialPanel } from '../src/components/MaterialPanel';
 import { ProfilePanel } from '../src/components/ProfilePanel';
 import { QuizPanel } from '../src/components/QuizPanel';
+import { QuizSubmitSummary } from '../src/components/QuizSubmitSummary';
+import { WrongAnswerAttribution } from '../src/components/WrongAnswerAttribution';
 import { ConversationView } from '../src/components/ConversationView';
 import { AppShell } from '../src/components/AppShell';
 import { SidebarNav } from '../src/components/SidebarNav';
@@ -842,6 +849,109 @@ console.log('\n--- 5. 练习面板 ---');
   );
 }
 
+/* ==================== 5b. 错题归因与提交小结（P-B9，2026-09-23） ==================== */
+
+console.log('\n--- 5b. 错题归因与提交小结（P-B9） ---');
+{
+  /*
+   * 这两块**只能在提交之后**才出现在面板上，而 SSR 点不了提交按钮 ——
+   * 于是拆成独立组件后直接渲染。（这也是把 `QuizPanel` 里那两段抽出来的原因之一：
+   * 留在面板内部就等于这段文案**没有任何断言能覆盖**。）
+   *
+   * 要覆盖的核心是**四种状态不能串**：有没有拿到结论、拿到的依据是哪一层，
+   * 说错任何一句都是失真（§2.6）。
+   */
+
+  const attribution: QuizAttribution = {
+    kind: 'calculation-error',
+    pattern: '把导数算成了倒数',
+    reason: '正确答案是 2，而 1/2 恰好是 2 的倒数（2 × 1/2 = 1）。',
+    basis: 'option-tag',
+    evidence: {
+      selectedOptionId: 'D',
+      selectedText: '1/2',
+      correctOptionId: 'B',
+      correctText: '2',
+    },
+    verification: 'human',
+  };
+
+  /* ① 有归因：类别、理由、**两侧原文**都要在 —— 后者是"可核对"的物理证据 */
+  const shown = render(
+    '错题归因（有结论）',
+    <WrongAnswerAttribution attribution={attribution} settled />,
+  );
+  check('★ 显示归因类别（计算错误）', shown.includes('计算错误'), shown.slice(0, 200));
+  check('★ 显示可核对理由原文', shown.includes('1/2 恰好是 2 的倒数'));
+  check(
+    '★★ 显示**两侧原文**供学生自己核对（你选的 vs 正确的）',
+    shown.includes('1/2') && shown.includes('正确选项是'),
+    null,
+  );
+
+  /* ② 无归因 + 已有结论 ⇒ 必须明说"推不出来"，并且说明**系统不猜** */
+  const none = render(
+    '错题归因（推不出来）',
+    <WrongAnswerAttribution attribution={null} settled />,
+  );
+  check('★★ 推不出归因时如实说"没有给出归因"，不沉默也不编', none.includes('没有给出归因'), null);
+  check('★ 说明系统只在有可核对依据时才下结论', none.includes('只在能给出可核对的依据时才下结论'));
+  check(
+    '★★ 不把"推不出来"写成"你已经掌握"（同一类失真）',
+    !/已掌握|没问题/.test(none),
+  );
+
+  /* ③ 无归因 + 还没有结论 ⇒ 说"正在核对"，**不许**说成"推不出来" */
+  const pending = render(
+    '错题归因（提交在途）',
+    <WrongAnswerAttribution attribution={null} settled={false} />,
+  );
+  check('★★ 提交还没回来时说"正在核对"，不说成"推不出来"', pending.includes('正在核对'));
+  check('★ 也不说成"没有给出归因"', !pending.includes('没有给出归因'));
+
+  /* ④ 提交小结的四种状态 */
+  const sentAll = render(
+    '提交小结（已上报 · 归因齐全）',
+    <QuizSubmitSummary report={{ outcome: 'sent', results: [], unattributed: 0 }} correct={2} total={3} />,
+  );
+  check('★ 已上报时说明已计入画像的「常见误区」', sentAll.includes('常见误区'), null);
+
+  const sentPartial = render(
+    '提交小结（已上报 · 有一道推不出来）',
+    <QuizSubmitSummary report={{ outcome: 'sent', results: [], unattributed: 1 }} correct={1} total={3} />,
+  );
+  check(
+    '★★ 有推不出来的错题时**如实报出条数**（1 道推不出、1 道有归因）',
+    sentPartial.includes('1 道**推不出**归因') && sentPartial.includes('1 道给出了可核对的归因'),
+    sentPartial,
+  );
+
+  const noSession = render(
+    '提交小结（无会话）',
+    <QuizSubmitSummary report={{ outcome: 'no-session', results: [], unattributed: 0 }} correct={2} total={3} />,
+  );
+  check(
+    '★★ 无会话时明说"没有发出任何请求"（不是"已上报"，I33）',
+    noSession.includes('没有发出任何请求') && !noSession.includes('已作为一条画像事件上报'),
+    noSession,
+  );
+
+  const failed = render(
+    '提交小结（上报失败）',
+    <QuizSubmitSummary report={{ outcome: 'failed', results: [], unattributed: 0 }} correct={2} total={3} />,
+  );
+  check('★ 上报失败时说明不影响判分', failed.includes('不影响你的作答与判分'));
+
+  const inFlight = render(
+    '提交小结（在途）',
+    <QuizSubmitSummary report={null} correct={2} total={3} />,
+  );
+  check(
+    '★★ 在途时只说"正在上报"，不预先声明成功',
+    inFlight.includes('正在上报') && !inFlight.includes('已作为一条画像事件上报'),
+  );
+}
+
 /* ==================== 6. 画像 ==================== */
 
 console.log('\n--- 6. 画像面板 ---');
@@ -1129,10 +1239,24 @@ console.log('\n--- 9. 外壳与对话模型：左栏切换、消息正序、时�
   );
   check('★ 折叠区默认收起（`<details>` 不带 open）', !/class="side-note"[^>]*open/.test(shell));
   const notImplemented = /本页尚未接入<\/strong><span>([\s\S]*?)<\/span>/.exec(shell)?.[1] ?? '';
+  /*
+   * 📌 2026-09-24 代改（B 执行，待 A 复核）：黑名单由「图片／语音」扩到 5 个词，
+   * 补上 2026-09-23 **已落地**的三项（教师视图／多智能体编排／错题归因）。
+   *
+   * 为什么这条必须扩：**"已实现的能力被标成未实现"与"未实现被标成已实现"是同一种失真**，
+   * 但这条断言原先只防后者。实现落地后没人回头删掉"未接入"名录 ——
+   * 2026-09-24 复核时页脚还真写着「多智能体编排、错题归因」，而两者早已接入。
+   * 本文件（`界面验收清单` V1.7）把这条写成"清单只能错一次"：读者一旦发现一处不实，整份清单都不再可信。
+   *
+   * ⚠️ **它仍然是一条黑名单，不是白名单** —— 将来又有一项从未接入变成已接入时，
+   * **这条断言不会变红**（只是那个词恰好还不在名单里）。如实登记为已知缺口，不假装已覆盖。
+   */
+  const STRUCK_FROM_FOOTER = ['图片', '语音', '教师视图', '多智能体编排', '错题归因'];
   check(
-    '★ 未接入清单里不再出现「图片」「语音」（V1.2/V1.3 修过的口径不许回退）',
-    notImplemented.length > 0 && !notImplemented.includes('图片') && !notImplemented.includes('语音'),
-    notImplemented.slice(0, 40),
+    '★ 未接入清单里不出现已接入项（V1.2/V1.3/V1.7 修过的口径不许回退）',
+    notImplemented.length > 0 &&
+      STRUCK_FROM_FOOTER.every((word) => !notImplemented.includes(word)),
+    notImplemented.slice(0, 60),
   );
 
   const shellBusy = render(

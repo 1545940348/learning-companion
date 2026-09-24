@@ -3,6 +3,7 @@
  */
 
 import type { Citation, SourceType, VerificationStatus } from './knowledge.js';
+import type { AgentDegradation } from './agents.js';
 
 /** 三种辅导模式；默认先给提示，完整解答由学生主动选择（说明书 2.5） */
 export type TutorMode = 'explain' | 'hint' | 'full';
@@ -92,6 +93,14 @@ export interface TutorResponse {
    * 不构成破坏性变更。
    */
   droppedBlocks?: DroppedBlocks;
+  /**
+   * 本次答疑中的**降级记录**（`P-B8`，2026-09-23；加性可选）。
+   *
+   * 目前来源是「验证 Agent 失败 → 本次标未验证」与「诊断 Agent 失败 → 跳过画像更新」。
+   * 与 `droppedBlocks` 的差别：那个说"这次少了几块"，这个说"这次有哪一环没跑成"——
+   * 两者都**只在异常时出现**，界面须分别如实说明（E18：不得静默）。
+   */
+  degraded?: AgentDegradation[];
 }
 
 /** 校验通过的回答块。B 负责结构、编号与摘录匹配校验（说明书 4.3） */

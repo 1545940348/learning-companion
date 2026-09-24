@@ -3,13 +3,22 @@
  *
  * 必须标注为「项目自编练习」，不能伪装成上传讲义原题（说明书 2.6）。
  * 数学内容由 B 初审、A 依据核验清单复核；分歧未解决不得进入演示。
+ *
+ * ### 干扰项的错因标注（`P-B9`，2026-09-23）
+ *
+ * 每个干扰项带一条人工写下的错因，说明"选它就等于犯了什么错"——这是错题归因里
+ * 最强的一层依据（见 `attribution.ts`）。标注本身放在 `fixed-quiz-misconceptions.ts`，
+ * 由本文件末尾的 `applyMisconceptions` 并进来，理由见该文件的文件头。
+ *
+ * ⚠️ **标注只加在干扰项上**：正确选项没有错因可写，接口上也就没有 `misconception` 字段。
  */
 
-import type { QuizItem } from '@lc/contracts';
+import type { QuizItem, QuizOption } from '@lc/contracts';
+import { FIXED_QUIZ_MISCONCEPTIONS } from './fixed-quiz-misconceptions.js';
 
 const SOURCE_LABEL = '项目自编练习';
 
-export const FIXED_QUIZ: Record<string, QuizItem[]> = {
+const BASE_QUIZ: Record<string, QuizItem[]> = {
   derivative: [
     {
       id: 'fx-der-1',
@@ -97,7 +106,7 @@ export const FIXED_QUIZ: Record<string, QuizItem[]> = {
         { id: 'D', text: "1 / f'(a)" },
       ],
       answer: 'B',
-      explanation: '导数的几何意义即切线斜率，故斜率为 f\'(a)。',
+      explanation: "导数的几何意义即切线斜率，故斜率为 f'(a)。",
     },
   ],
 
@@ -147,3 +156,31 @@ export const FIXED_QUIZ: Record<string, QuizItem[]> = {
     },
   ],
 };
+
+/** 标注表的键：`<题目 id>:<选项 id>` */
+export function misconceptionKey(itemId: string, optionId: string): string {
+  return `${itemId}:${optionId}`;
+}
+
+/**
+ * 把标注表并进题目。
+ *
+ * 找不到标注的选项**原样返回**（不带 `misconception`）—— 归因遇到它就会走到"无法归因"，
+ * 这是如实的结果，不该由这里补一个。标注写错键（拼错题目 id）在装配时看不出来，
+ * 因此 `verify:all` 有一条断言专门核对"27 条标注的键全部命中"，把静默漏标变成红灯。
+ */
+function applyMisconceptions(quiz: Record<string, QuizItem[]>): Record<string, QuizItem[]> {
+  const withTags: Record<string, QuizItem[]> = {};
+  for (const [topic, items] of Object.entries(quiz)) {
+    withTags[topic] = items.map((item) => ({
+      ...item,
+      options: item.options.map((option): QuizOption => {
+        const tag = FIXED_QUIZ_MISCONCEPTIONS[misconceptionKey(item.id, option.id)];
+        return tag ? { ...option, misconception: tag } : option;
+      }),
+    }));
+  }
+  return withTags;
+}
+
+export const FIXED_QUIZ: Record<string, QuizItem[]> = applyMisconceptions(BASE_QUIZ);
