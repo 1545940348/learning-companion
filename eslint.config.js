@@ -27,6 +27,16 @@ export default [
       'deploy-dist/**',
       '.learnbuddy/**',
       'apps/server/scripts/**/*.d.ts',
+      /*
+       * `.tmp/` 是 `.gitignore` 里声明过的**本地临时目录**（截图、无头浏览器 profile、
+       * 一次性探针脚本）。既然它不进版本库，就不该被 lint —— 2026-09-26 实测：
+       * 它一个目录贡献了 **2775 条 warning（占全部 warning 的 100%）**，全部来自
+       * Chrome 无头模式生成的 profile 里的第三方扩展脚本；把它们算进 `npm run lint`
+       * 会让"warning 数"彻底失去信号（源码本身是 0 warning）。
+       *
+       * 注意：`.gitignore` 与 eslint 的 ignores **互不相通**，必须两处都写。
+       */
+      '.tmp/**',
     ],
   },
   {
